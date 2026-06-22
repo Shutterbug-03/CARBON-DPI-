@@ -21,3 +21,12 @@ dev.db
 # OS Files
 .DS_Store
 Thumbs.db
+
+# Local testing and documentation
+*.pdf
+init-multiple-databases.sh
+test_*.py
+codebase_autopsy.md
+task.md
+implementation_plan.md
+deep_test.js
