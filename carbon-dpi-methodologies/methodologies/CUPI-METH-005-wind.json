@@ -1,0 +1,28 @@
+{
+  "methodology_id": "CUPI-METH-005",
+  "name": "Grid-Connected Wind Energy Generation",
+  "version": "1.0.0",
+  "status": "validated",
+  "external_reference": { "standard": "Verra_VCS", "code": "ACM0002", "version": "19", "url": "https://verra.org/methodologies/acm0002" },
+  "applicable_activity_types": ["wind_onshore", "wind_offshore"],
+  "sector": "Energy",
+  "impact_type": "AVOIDED",
+  "output_unit": "tCO2e",
+  "baseline_formula": {
+    "description": "Grid electricity displaced by renewable wind generation",
+    "formula": "tCO2e = (kWh_generated * grid_EF_kg_per_kWh / 1000) * CAF",
+    "variables": {
+      "kWh_generated": { "source": "iot_scada", "unit": "kWh" },
+      "grid_EF_kg_per_kWh": { "value": 0.716, "source": "CEA India v19.0 national average", "unit": "kgCO2_per_kWh" }
+    }
+  },
+  "adjustment_factors": [
+    { "name": "conservative_adjustment_factor", "value": 0.95, "condition": "UNFCCC CDM EB55 Annex II" }
+  ],
+  "additionality_test": "common_practice_analysis",
+  "leakage_assessment": "not_applicable_grid_connected",
+  "confidence_score_rules": { "max_score": 100, "minimum_threshold": 30 },
+  "version_history": [
+    { "version": "1.0.0", "effective_date": "2025-01-01", "status": "current" }
+  ]
+}

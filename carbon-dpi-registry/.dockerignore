@@ -1,0 +1,6 @@
+node_modules
+dist
+dev.db
+reference-node.db
+registry.db
+.env

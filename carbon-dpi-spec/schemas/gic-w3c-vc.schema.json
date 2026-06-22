@@ -1,0 +1,190 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GreenImpactCertificate_W3C_VC",
+  "description": "Carbon DPI Protocol — Green Impact Certificate (GIC) in W3C Verifiable Credential format. This is the primary output of the Carbon DPI protocol, consumable by Beckn applications, carbon registries, banks, and government systems.",
+  "type": "object",
+  "required": ["@context", "id", "type", "issuer", "issuanceDate", "credentialSubject", "proof"],
+  "properties": {
+    "@context": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 2,
+      "description": "JSON-LD context — must include W3C credentials context and Carbon DPI GIC context",
+      "default": [
+        "https://www.w3.org/2018/credentials/v1",
+        "https://spec.carbon-dpi.org/contexts/gic/v1"
+      ]
+    },
+    "id": {
+      "type": "string",
+      "format": "uri",
+      "description": "Publicly dereferenceable URI for this GIC",
+      "examples": ["https://verify.greenpe.in/gic/GP-GIC-2024-GJ-SOL-0442-Q3"]
+    },
+    "type": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 2,
+      "contains": { "const": "VerifiableCredential" },
+      "description": "Must include 'VerifiableCredential' and 'GreenImpactCertificate'",
+      "default": ["VerifiableCredential", "GreenImpactCertificate"]
+    },
+    "issuer": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Climate DID of the issuing verifier node",
+          "pattern": "^did:cupi:",
+          "examples": ["did:cupi:india:verifier:greenpe"]
+        },
+        "name": {
+          "type": "string",
+          "examples": ["GreenPe Technologies — Carbon DPI Reference Node"]
+        }
+      }
+    },
+    "issuanceDate": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expirationDate": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Optional expiration date for time-limited certifications"
+    },
+    "credentialSubject": {
+      "type": "object",
+      "required": [
+        "id",
+        "gic_id",
+        "activity_type",
+        "methodology",
+        "monitoring_period",
+        "verified_quantity",
+        "calculation_log_hash",
+        "data_integrity_score",
+        "public_verification_url"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Climate DID of the subject asset",
+          "pattern": "^did:cupi:",
+          "examples": ["did:cupi:india:solar:GP-IND-2024-GJ-044821-SOL"]
+        },
+        "gic_id": {
+          "type": "string",
+          "description": "Human-readable GIC identifier",
+          "pattern": "^GP-GIC-",
+          "examples": ["GP-GIC-2024-GJ-SOL-0442-Q3"]
+        },
+        "activity_type": {
+          "type": "string",
+          "description": "Climate action type from the CDIF taxonomy"
+        },
+        "methodology": {
+          "type": "object",
+          "required": ["id", "version", "authority", "emission_factor"],
+          "properties": {
+            "id": {
+              "type": "string",
+              "examples": ["AMS-I.D"]
+            },
+            "version": {
+              "type": "string",
+              "examples": ["18"]
+            },
+            "authority": {
+              "type": "string",
+              "examples": ["UNFCCC_CDM"]
+            },
+            "emission_factor": {
+              "type": "object",
+              "required": ["value", "unit", "source"],
+              "properties": {
+                "value": { "type": "number" },
+                "unit": { "type": "string", "examples": ["kgCO2_per_kWh"] },
+                "source": { "type": "string", "examples": ["CEA_Baseline_v19_FY2024_Western"] }
+              }
+            }
+          }
+        },
+        "monitoring_period": {
+          "type": "object",
+          "required": ["start", "end", "days"],
+          "properties": {
+            "start": { "type": "string", "format": "date" },
+            "end": { "type": "string", "format": "date" },
+            "days": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "verified_quantity": {
+          "type": "object",
+          "required": ["value", "unit", "confidence_score"],
+          "properties": {
+            "value": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Verified tCO₂e value"
+            },
+            "unit": {
+              "type": "string",
+              "enum": ["tCO2e", "kgCO2e"]
+            },
+            "confidence_score": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100,
+              "description": "Data quality confidence score (0-100)"
+            }
+          }
+        },
+        "calculation_log_hash": {
+          "type": "string",
+          "description": "SHA-256 hash of the full MRV calculation trace",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "data_integrity_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Overall data integrity percentage"
+        },
+        "public_verification_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Public URL where anyone can verify this GIC without login"
+        }
+      }
+    },
+    "proof": {
+      "type": "object",
+      "required": ["type", "created", "verificationMethod", "proofPurpose", "proofValue"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "Ed25519Signature2020"
+        },
+        "created": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "verificationMethod": {
+          "type": "string",
+          "description": "DID URL of the signing key",
+          "examples": ["did:cupi:india:verifier:greenpe#key-1"]
+        },
+        "proofPurpose": {
+          "type": "string",
+          "const": "assertionMethod"
+        },
+        "proofValue": {
+          "type": "string",
+          "description": "Base58-encoded Ed25519 signature"
+        }
+      }
+    }
+  }
+}

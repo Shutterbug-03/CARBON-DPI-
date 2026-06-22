@@ -1,0 +1,315 @@
+openapi: "3.0.3"
+info:
+  title: Carbon DPI Protocol API
+  version: "1.0.0"
+  description: |
+    Open API specification for the Carbon DPI protocol — the digital public infrastructure
+    for verifiable climate action in India.
+
+    ## Layers
+    - **Layer 1** — CIH: Composite Identity Hash (identity-asset binding)
+    - **Layer 2** — CDIF: Climate Data Interchange Format (data ingestion)
+    - **Layer 3** — MRV: Measurement, Reporting, Verification (deterministic calculation)
+    - **Layer 5** — GIC: Green Impact Certificate (W3C Verifiable Credential output)
+
+    ## Emission Factor Sources
+    - CEA India CO₂ Baseline Database v19.0, FY2023-24
+    - IPCC AR6 (CH₄ GWP = 27.9, 100yr)
+    - UNFCCC CDM EB55 Annex II (5% Conservative Adjustment Factor)
+
+    ## Rules
+    1. All calculations are deterministic — same inputs → same outputs
+    2. AI assists (anomaly detection) but does NOT determine emissions
+    3. Full calculation trace is returned for every MRV result
+  contact:
+    name: Carbon DPI Protocol
+    url: https://github.com/carbon-dpi
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: https://carbon-dpi.greenpe.in/api/v1
+    description: Production (GreenPe reference node)
+  - url: http://localhost:3000/api/v1
+    description: Local development
+
+paths:
+  /asset/register:
+    post:
+      operationId: registerAsset
+      summary: Register a climate asset and generate CIH
+      description: |
+        Layer 1 — Creates a Composite Identity Hash (CIH) binding a verified entity
+        to a physical asset, IoT device, and GPS location.
+        CIH = SHA-256(identityHash ‖ assetId ‖ deviceId ‖ lat ‖ lng ‖ timestamp)
+      tags: [Layer 1 — Identity]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entity, asset]
+              properties:
+                entity:
+                  type: object
+                  required: [id, type, name, registrationId, credentialType, location]
+                  properties:
+                    id: { type: string }
+                    type: { type: string, enum: [FARMER, MSME, EXPORTER, GOVERNMENT, INDUSTRIAL] }
+                    name: { type: string }
+                    registrationId: { type: string, description: "GSTIN / PAN / UDYAM / Aadhaar hash" }
+                    credentialType: { type: string, enum: [AADHAAR_HASH, GSTIN, PAN, UDYAM, ENTERPRISE_KYC] }
+                    location:
+                      type: object
+                      properties:
+                        lat: { type: number }
+                        lng: { type: number }
+                        region: { type: string }
+                asset:
+                  type: object
+                  required: [id, type, description, deviceId]
+                  properties:
+                    id: { type: string }
+                    type: { type: string, enum: [LAND, MACHINE, FACILITY, VEHICLE, EV_FLEET, INDUSTRIAL_BOILER] }
+                    description: { type: string }
+                    deviceId: { type: string, description: "IoT device / smart meter serial" }
+      responses:
+        "200":
+          description: CIH generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cih: { type: string, description: "64-char SHA-256 hex — the Composite Identity Hash" }
+                  entityId: { type: string }
+                  assetId: { type: string }
+                  deviceId: { type: string }
+                  geolocation: { type: object, properties: { lat: { type: number }, lng: { type: number } } }
+                  boundAt: { type: string, format: date-time }
+
+  /cdif/submit:
+    post:
+      operationId: submitCDIF
+      summary: Submit climate data in CDIF format
+      description: |
+        Layer 2 — Accepts a batch of CDIF-compliant climate data packets. Validates against
+        8 mandatory fields, classifies trust levels (HIGH/MEDIUM/LOW), and returns
+        accepted/rejected breakdown with an ingestion hash for the audit trail.
+      tags: [Layer 2 — Data Ingestion]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cihReference, packets]
+              properties:
+                cihReference:
+                  type: string
+                  description: "CIH from Layer 1 (64-char SHA-256 hex)"
+                  pattern: "^[a-f0-9]{64}$"
+                packets:
+                  type: array
+                  maxItems: 10000
+                  items:
+                    type: object
+                    required: [sourceType, sourceId, timestamp, geolocation, value, unit, reportingPeriod]
+                    properties:
+                      sourceType: { type: string, enum: [IOT_SENSOR, SATELLITE, SCADA, MANUAL_ENTRY, API_IMPORT, DOCUMENT_SCAN] }
+                      sourceId: { type: string }
+                      timestamp: { type: string, format: date-time }
+                      geolocation: { type: object, properties: { lat: { type: number }, lng: { type: number } } }
+                      value: { type: number, minimum: 0 }
+                      unit: { type: string }
+                      deviceSignature: { type: string, default: "MANUAL" }
+                      reportingPeriod: { type: object, properties: { start: { type: string, format: date-time }, end: { type: string, format: date-time } } }
+                      schemaVersion: { type: string, default: "CDIF-1.0" }
+      responses:
+        "200":
+          description: Data ingested successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accepted: { type: array, items: { type: object } }
+                  rejected: { type: array, items: { type: object, properties: { packet: { type: object }, reason: { type: string } } } }
+                  summary:
+                    type: object
+                    properties:
+                      total: { type: integer }
+                      accepted: { type: integer }
+                      rejected: { type: integer }
+                      trustDistribution: { type: object, properties: { HIGH: { type: integer }, MEDIUM: { type: integer }, LOW: { type: integer } } }
+                  ingestionHash: { type: string }
+
+  /mrv/verify:
+    post:
+      operationId: verifyMRV
+      summary: Run deterministic MRV calculation
+      description: |
+        Layer 3 — Executes the MRV engine with a selected methodology, producing a
+        deterministic tCO₂e result with full calculation trace and confidence score.
+        All formulas use government-approved emission factors (CEA, IPCC, UNFCCC).
+      tags: [Layer 3 — MRV Engine]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cihReference, dataPointIds, methodologyId, timeWindow]
+              properties:
+                cihReference: { type: string, pattern: "^[a-f0-9]{64}$" }
+                dataPointIds: { type: array, items: { type: string } }
+                methodologyId: { type: string, enum: [CUPI-METH-001, CUPI-METH-002, CUPI-METH-003, CUPI-METH-004, CUPI-METH-005] }
+                timeWindow:
+                  type: object
+                  properties:
+                    start: { type: string, format: date-time }
+                    end: { type: string, format: date-time }
+                gridRegion: { type: string, enum: [India-North, India-South, India-East, India-West, India-Northeast, India-National], default: India-National }
+      responses:
+        "200":
+          description: MRV calculation completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  impactValue:
+                    type: object
+                    properties:
+                      amount: { type: number }
+                      unit: { type: string, enum: [tCO2e, kgCO2e] }
+                      type: { type: string, enum: [AVOIDED, REMOVED] }
+                  methodologyId: { type: string }
+                  confidenceScore: { type: integer, minimum: 0, maximum: 100 }
+                  calculationTrace:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        step: { type: string }
+                        input: { type: string }
+                        formula: { type: string }
+                        output: { type: string }
+                  errors: { type: array, items: { type: string } }
+                  warnings: { type: array, items: { type: string } }
+
+  /gic/generate:
+    post:
+      operationId: generateGIC
+      summary: Generate a Green Impact Certificate
+      description: |
+        Layer 5 — Issues a GIC as a W3C Verifiable Credential with Ed25519 proof.
+        The GIC is publicly verifiable at verify.greenpe.in/gic/{id}.
+      tags: [Layer 5 — GIC Issuance]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mrvResultId]
+              properties:
+                mrvResultId: { type: string, description: "Reference to a completed MRV calculation" }
+                outputFormats:
+                  type: array
+                  items: { type: string, enum: [w3c_vc_json, pdf, cbam_eu_xml, brsr_xbrl] }
+                  default: [w3c_vc_json, pdf]
+      responses:
+        "200":
+          description: GIC issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  gicId: { type: string }
+                  status: { type: string, enum: [VERIFIED, ISSUED] }
+                  verificationUrl: { type: string, format: uri }
+                  w3cVC: { type: object, description: "Full W3C Verifiable Credential" }
+                  hash: { type: string }
+                  qrPayload: { type: string }
+
+  /gic/{id}:
+    get:
+      operationId: verifyGIC
+      summary: Publicly verify a GIC
+      description: |
+        Public, unauthenticated endpoint. Any party (bank, government, auditor)
+        can verify a GIC by providing its ID. No API key required.
+      tags: [Layer 5 — GIC Issuance]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: "GIC ID (e.g. GP-GIC-2026-A3B1F2C4)"
+        - name: format
+          in: query
+          schema: { type: string, enum: [json, w3c_vc, registry], default: json }
+      responses:
+        "200":
+          description: GIC verified
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  verified: { type: boolean }
+                  gicId: { type: string }
+                  status: { type: string }
+                  verifiedImpact:
+                    type: object
+                    properties:
+                      tCO2e: { type: number }
+                      unit: { type: string }
+                  publiclyVerifiable: { type: boolean }
+        "404":
+          description: GIC not found
+
+  /methodology/validate:
+    post:
+      operationId: validateMethodology
+      summary: Validate a methodology against the registry
+      description: |
+        Checks if a methodology ID is registered and valid in the Carbon DPI
+        methodology registry. Returns the full methodology specification if found.
+      tags: [Registry]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [methodologyId]
+              properties:
+                methodologyId: { type: string }
+      responses:
+        "200":
+          description: Methodology found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid: { type: boolean }
+                  methodology: { type: object }
+
+tags:
+  - name: Layer 1 — Identity
+    description: Composite Identity Hash (CIH) — cryptographic identity-asset binding
+  - name: Layer 2 — Data Ingestion
+    description: Climate Data Interchange Format (CDIF) — standardised data submission
+  - name: Layer 3 — MRV Engine
+    description: Deterministic MRV calculation with approved emission factors
+  - name: Layer 5 — GIC Issuance
+    description: Green Impact Certificate as W3C Verifiable Credential
+  - name: Registry
+    description: Trust registry operations

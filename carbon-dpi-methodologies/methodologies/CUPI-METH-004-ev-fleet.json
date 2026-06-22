@@ -1,0 +1,30 @@
+{
+  "methodology_id": "CUPI-METH-004",
+  "name": "EV Fleet — Avoided Tailpipe Emissions",
+  "version": "1.0.0",
+  "status": "validated",
+  "external_reference": { "standard": "MoRTH_India", "code": "EV-AVD-001", "version": "1", "url": "https://morth.nic.in" },
+  "applicable_activity_types": ["ev_fleet_commercial", "ev_individual"],
+  "sector": "Transportation",
+  "impact_type": "AVOIDED",
+  "output_unit": "tCO2e",
+  "baseline_formula": {
+    "description": "Emissions avoided by replacing petrol/diesel vehicle-km with electric vehicle-km",
+    "formula": "tCO2e = km_driven * (petrol_EF_kg_per_km - (kWh_per_km * grid_EF_kg_per_kWh)) / 1000",
+    "variables": {
+      "km_driven": { "source": "iot_telematics", "unit": "km" },
+      "petrol_EF_kg_per_km": { "value": 0.192, "source": "MoRTH India (avg passenger vehicle)", "unit": "kgCO2_per_km" },
+      "kWh_per_km": { "value": 0.18, "source": "Industry average EV consumption", "unit": "kWh/km" },
+      "grid_EF_kg_per_kWh": { "value": 0.716, "source": "CEA India v19.0 national average", "unit": "kgCO2_per_kWh" }
+    }
+  },
+  "adjustment_factors": [
+    { "name": "conservative_adjustment_factor", "value": 0.95, "condition": "UNFCCC CDM EB55 Annex II" }
+  ],
+  "additionality_test": "common_practice_analysis",
+  "leakage_assessment": "grid_emission_accounting",
+  "confidence_score_rules": { "max_score": 100, "minimum_threshold": 30 },
+  "version_history": [
+    { "version": "1.0.0", "effective_date": "2025-01-01", "status": "current" }
+  ]
+}

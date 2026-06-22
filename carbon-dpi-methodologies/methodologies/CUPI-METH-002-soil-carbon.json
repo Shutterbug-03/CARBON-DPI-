@@ -1,0 +1,28 @@
+{
+  "methodology_id": "CUPI-METH-002",
+  "name": "Soil Carbon Sequestration",
+  "version": "1.0.0",
+  "status": "validated",
+  "external_reference": { "standard": "IPCC_AR6", "code": "VM0042", "version": "1", "url": "https://verra.org/methodologies/vm0042" },
+  "applicable_activity_types": ["afforestation", "agricultural_solar_pump"],
+  "sector": "Agriculture",
+  "impact_type": "REMOVED",
+  "output_unit": "tCO2e",
+  "baseline_formula": {
+    "description": "Soil organic carbon stock change converted to CO2 equivalent",
+    "formula": "tCO2e = delta_soc_tonnes_per_ha * area_ha * 3.67",
+    "variables": {
+      "delta_soc_tonnes_per_ha": { "source": "biomass_survey_data", "unit": "tC/ha" },
+      "c_to_co2_ratio": { "value": 3.67, "source": "Molecular weight ratio CO2/C (44/12)", "unit": "tCO2_per_tC" }
+    }
+  },
+  "adjustment_factors": [
+    { "name": "conservative_adjustment_factor", "value": 0.90, "condition": "10% discount for soil carbon uncertainty (IPCC guidance)" }
+  ],
+  "additionality_test": "common_practice_analysis",
+  "leakage_assessment": "land_use_change_assessment",
+  "confidence_score_rules": { "max_score": 100, "minimum_threshold": 30 },
+  "version_history": [
+    { "version": "1.0.0", "effective_date": "2025-01-01", "status": "current" }
+  ]
+}

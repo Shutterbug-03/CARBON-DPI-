@@ -1,0 +1,30 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Device {
+  cihReference    String   @id
+  sourceType      String
+  sourceId        String
+  publicKeyBase64 String
+  lat             Float
+  lng             Float
+  status          String   @default("ACTIVE")
+  createdAt       DateTime @default(now())
+}
+
+model Verifier {
+  did               String   @id
+  name              String
+  accreditationBody String
+  status            String   @default("ACTIVE")
+  url               String   @default("http://localhost:3001")
+}

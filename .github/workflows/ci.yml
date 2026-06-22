@@ -1,0 +1,96 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build_and_test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+        service:
+          - carbon-dpi-beckn-adapter
+          - carbon-dpi-registry
+          - carbon-dpi-event-bus
+          - carbon-dpi-beckn-gateway
+          - carbon-dpi-reference-node
+          - carbon-dpi-sdk-js
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+        cache-dependency-path: '**/package-lock.json'
+
+    # The adapter is a dependency for the node, so we always build it first
+    - name: Build Adapter
+      run: |
+        cd carbon-dpi-beckn-adapter
+        npm install
+        npm run build
+
+    - name: Install Dependencies
+      run: |
+        cd ${{ matrix.service }}
+        npm install
+
+    - name: Build Service
+      run: |
+        cd ${{ matrix.service }}
+        npm run build
+
+    - name: Run Tests
+      run: |
+        cd ${{ matrix.service }}
+        npm test
+        
+    - name: Security Audit
+      run: |
+        cd ${{ matrix.service }}
+        npm audit --audit-level=high || true
+
+  python_sdk_test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: |
+          cd carbon-dpi-sdk-python
+          python -m pip install --upgrade pip
+          pip install cryptography pytest
+      - name: Syntax Check
+        run: |
+          cd carbon-dpi-sdk-python
+          python -m py_compile carbon_dpi/sdk.py
+          
+  e2e_test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+      - name: Build Global Dependencies
+        run: |
+          cd carbon-dpi-beckn-adapter && npm install && npm run build
+          cd ../carbon-dpi-sdk-js && npm install && npm run build
+      - name: Start Docker Compose
+        run: docker-compose up -d
+      - name: Wait for services
+        run: sleep 10
+      - name: Run Deep Test
+        run: node deep_test.js

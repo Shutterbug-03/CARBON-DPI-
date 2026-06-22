@@ -1,0 +1,89 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ClimateDataInterchangeFormat",
+  "description": "Carbon DPI Protocol — Layer 2. The CDIF (Climate Data Interchange Format) defines the 8 mandatory fields for any climate data submission. Every data point entering the Carbon DPI protocol must conform to this schema.",
+  "type": "object",
+  "required": [
+    "id",
+    "cih_reference",
+    "source_type",
+    "source_id",
+    "timestamp",
+    "geolocation",
+    "value",
+    "unit",
+    "reporting_period",
+    "schema_version"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique identifier for this data point"
+    },
+    "cih_reference": {
+      "type": "string",
+      "description": "CIH from Layer 1 — links this data to a verified identity-asset binding",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "source_type": {
+      "type": "string",
+      "enum": ["IOT_SENSOR", "SATELLITE", "SCADA", "API_IMPORT", "MANUAL_ENTRY", "DOCUMENT_SCAN"],
+      "description": "Data source type — determines trust level assignment"
+    },
+    "source_id": {
+      "type": "string",
+      "description": "Device or system identifier that produced this data"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of measurement. Cannot be in the future."
+    },
+    "geolocation": {
+      "type": "object",
+      "required": ["lat", "lng"],
+      "properties": {
+        "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+        "lng": { "type": "number", "minimum": -180, "maximum": 180 }
+      },
+      "description": "GPS coordinates of the asset at time of measurement"
+    },
+    "value": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Measured value — must be non-negative"
+    },
+    "unit": {
+      "type": "string",
+      "enum": ["kWh", "MWh", "litres", "tonnes", "km", "tC_per_ha", "m3"],
+      "description": "Measurement unit"
+    },
+    "device_signature": {
+      "type": "string",
+      "description": "Cryptographic signature from the device proving data authenticity. 'MANUAL' for non-IoT sources.",
+      "default": "MANUAL"
+    },
+    "reporting_period": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "string", "format": "date-time" },
+        "end": { "type": "string", "format": "date-time" }
+      },
+      "description": "Monitoring window for this data point"
+    },
+    "schema_version": {
+      "type": "string",
+      "description": "CDIF version identifier for backward compatibility",
+      "default": "CDIF-1.0"
+    },
+    "trust_score": {
+      "type": "string",
+      "enum": ["HIGH", "MEDIUM", "LOW"],
+      "description": "Computed trust level. IOT_SENSOR/SATELLITE=HIGH, SCADA/API=MEDIUM, MANUAL/SCAN=LOW"
+    }
+  },
+  "additionalProperties": true
+}

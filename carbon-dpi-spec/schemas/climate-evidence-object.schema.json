@@ -1,0 +1,122 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ClimateEvidenceObject",
+  "description": "Carbon DPI Protocol — Evidence chain for a climate action. Contains raw data hash, data completeness metrics, cross-validation results, and cryptographic signatures proving data authenticity.",
+  "type": "object",
+  "required": [
+    "evidence_id",
+    "activity_id",
+    "owner_cih",
+    "evidence_type",
+    "raw_data_hash",
+    "data_points",
+    "data_completeness",
+    "evidence_signature",
+    "source_system",
+    "collection_timestamp",
+    "schema_version"
+  ],
+  "properties": {
+    "evidence_id": {
+      "type": "string",
+      "description": "Unique identifier for this evidence package",
+      "pattern": "^EVD-[0-9]{4}-[A-Z]{2}-[A-Z]{3}-[0-9]{4}-Q[1-4]-[0-9]{3}$",
+      "examples": ["EVD-2024-GJ-SOL-0442-Q3-001"]
+    },
+    "activity_id": {
+      "type": "string",
+      "description": "Reference to the ClimateActionObject this evidence supports"
+    },
+    "owner_cih": {
+      "type": "string",
+      "description": "Composite Identity Hash of the asset owner",
+      "minLength": 64,
+      "maxLength": 64
+    },
+    "evidence_type": {
+      "type": "string",
+      "enum": [
+        "iot_generation_data",
+        "satellite_irradiance_data",
+        "discom_billing_data",
+        "telematics_trip_data",
+        "scada_emission_data",
+        "gas_flow_meter_data",
+        "biomass_survey_data",
+        "manual_audit_report"
+      ],
+      "description": "Type of evidence provided"
+    },
+    "raw_data_hash": {
+      "type": "string",
+      "description": "SHA-256 hash of the raw data package, proving data integrity",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "data_points": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of individual data points in this evidence package"
+    },
+    "data_completeness": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Fraction of expected data points that are present (1.0 = 100% complete)"
+    },
+    "anomaly_flags": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string" },
+          "severity": { "type": "string", "enum": ["low", "medium", "high"] },
+          "description": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        }
+      },
+      "description": "Any anomalies detected in the data"
+    },
+    "cross_validation": {
+      "type": "object",
+      "description": "Cross-validation results against independent data sources",
+      "properties": {
+        "satellite_irradiance": {
+          "type": "string",
+          "enum": ["VALIDATED", "FAILED", "NOT_APPLICABLE"]
+        },
+        "discom_billing": {
+          "type": "string",
+          "enum": ["VALIDATED", "FAILED", "NOT_APPLICABLE"]
+        },
+        "nameplate_capacity_check": {
+          "type": "string",
+          "enum": ["PASS", "FAIL", "NOT_APPLICABLE"]
+        },
+        "weather_correlation": {
+          "type": "string",
+          "enum": ["VALIDATED", "FAILED", "NOT_APPLICABLE"]
+        }
+      }
+    },
+    "evidence_signature": {
+      "type": "string",
+      "description": "Ed25519 signature of the evidence package",
+      "pattern": "^ed25519:[a-f0-9]+$"
+    },
+    "source_system": {
+      "type": "string",
+      "description": "The system that produced this evidence data",
+      "examples": ["huawei_fusionsolar_api_v3", "bescom_smart_meter_api", "tata_fleet_edge_v2"]
+    },
+    "collection_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this evidence was collected"
+    },
+    "schema_version": {
+      "type": "string",
+      "examples": ["1.0.0"]
+    }
+  },
+  "additionalProperties": false
+}

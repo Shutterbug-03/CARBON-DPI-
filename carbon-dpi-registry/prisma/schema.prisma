@@ -1,0 +1,42 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/@prisma/client-registry"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Device {
+  cihReference    String   @id
+  sourceType      String
+  sourceId        String
+  publicKeyBase64 String
+  lat             Float
+  lng             Float
+  status          String   @default("ACTIVE")
+  createdAt       DateTime @default(now())
+}
+
+model Verifier {
+  did               String   @id
+  name              String
+  accreditationBody String
+  status            String   @default("ACTIVE")
+  url               String   @default("http://localhost:3001")
+}
+
+model Subscriber {
+  subscriber_id      String   @id
+  subscriber_url     String
+  type               String
+  signing_public_key String
+  valid_until        DateTime
+  status             String   @default("SUBSCRIBED")
+  created_at         DateTime @default(now())
+  updated_at         DateTime @updatedAt
+}

@@ -1,0 +1,128 @@
+version: '3.8'
+
+services:
+  registry:
+    build:
+      context: ./carbon-dpi-registry
+      dockerfile: Dockerfile
+    container_name: cdpi-registry
+    ports:
+      - "3003:3003"
+    environment:
+      - PORT=3003
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/cdpi_registry
+      - LOG_LEVEL=debug
+    volumes:
+      - registry_data:/data
+      - ./carbon-dpi-methodologies/methodologies:/carbon-dpi-methodologies/methodologies
+    networks:
+      - cdpi-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  reference-node:
+    build:
+      context: ./carbon-dpi-reference-node
+      dockerfile: Dockerfile
+    container_name: cdpi-reference-node
+    ports:
+      - "3001:3001"
+      - "3099:3001" # Host port 3099 mapped to container 3001 to support old tests
+    environment:
+      - PORT=3001
+      - BECKN_SUBSCRIBER_ID=carbon-dpi.greenpe.in
+      - BECKN_SHARED_SECRET=reference-node-secret
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/cdpi_node
+      - LOG_LEVEL=debug
+      - REGISTRY_URL=http://registry:3003
+      - BECKN_ED25519_PRIVATE_KEY=${BECKN_ED25519_PRIVATE_KEY}
+      - BECKN_ED25519_PUBLIC_KEY=${BECKN_ED25519_PUBLIC_KEY}
+      - BECKN_BAP_PUBLIC_KEY=${BECKN_BAP_PUBLIC_KEY}
+    volumes:
+      - node_data:/data
+    networks:
+      - cdpi-network
+    depends_on:
+      - registry
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: cdpi-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - cdpi-network
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: cdpi-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_MULTIPLE_DATABASES=cdpi_registry,cdpi_node
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-multiple-databases.sh:/docker-entrypoint-initdb.d/init-multiple-databases.sh
+    networks:
+      - cdpi-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ./carbon-dpi-beckn-gateway
+      dockerfile: Dockerfile
+    container_name: cdpi-gateway
+    ports:
+      - "3005:3005"
+    environment:
+      - PORT=3005
+      - LOG_LEVEL=debug
+      - REFERENCE_NODE_URL=http://reference-node:3001
+    networks:
+      - cdpi-network
+    depends_on:
+      - reference-node
+    restart: unless-stopped
+
+  event-bus:
+    build:
+      context: ./carbon-dpi-event-bus
+      dockerfile: Dockerfile
+    container_name: cdpi-event-bus
+    ports:
+      - "3004:3004"
+      - "1883:1883"
+    environment:
+      - PORT=3004
+      - LOG_LEVEL=debug
+      - BAP_URI=http://event-bus:3004
+      - REDIS_URL=redis://redis:6379
+      - BECKN_GATEWAY_URL=http://gateway:3005
+    networks:
+      - cdpi-network
+    depends_on:
+      - gateway
+      - redis
+    restart: unless-stopped
+
+volumes:
+  registry_data:
+  node_data:
+  postgres_data:
+
+networks:
+  cdpi-network:
+    driver: bridge

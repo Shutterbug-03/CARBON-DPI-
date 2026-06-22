@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  carbon-dpi-reference-node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: carbon-dpi-reference-node:latest
+    container_name: carbon-dpi-reference-node
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3001}:3001"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/heartbeat"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

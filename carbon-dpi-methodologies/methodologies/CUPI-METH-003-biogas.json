@@ -1,0 +1,29 @@
+{
+  "methodology_id": "CUPI-METH-003",
+  "name": "Biogas / Methane Capture & Combustion",
+  "version": "1.0.0",
+  "status": "validated",
+  "external_reference": { "standard": "UNFCCC_CDM", "code": "AMS-III.D", "version": "20", "url": "https://cdm.unfccc.int/methodologies" },
+  "applicable_activity_types": ["biogas", "waste_methane", "cbg"],
+  "sector": "Waste",
+  "impact_type": "AVOIDED",
+  "output_unit": "tCO2e",
+  "baseline_formula": {
+    "description": "Methane captured and combusted, converted to CO2e using GWP-100",
+    "formula": "tCO2e = CH4_captured_tonnes * CH4_GWP_100yr * oxidation_factor",
+    "variables": {
+      "CH4_captured_tonnes": { "source": "gas_flow_meter_data", "unit": "tonnes CH4" },
+      "CH4_GWP_100yr": { "value": 27.9, "source": "IPCC AR6 (100-year, including climate-carbon feedbacks)", "unit": "CO2e_per_tCH4" },
+      "oxidation_factor": { "value": 0.99, "source": "99% methane oxidation in flare/engine" }
+    }
+  },
+  "adjustment_factors": [
+    { "name": "conservative_adjustment_factor", "value": 0.95, "condition": "UNFCCC CDM EB55 Annex II" }
+  ],
+  "additionality_test": "barrier_analysis",
+  "leakage_assessment": "upstream_methane_leakage",
+  "confidence_score_rules": { "max_score": 100, "minimum_threshold": 30 },
+  "version_history": [
+    { "version": "1.0.0", "effective_date": "2025-01-01", "status": "current" }
+  ]
+}

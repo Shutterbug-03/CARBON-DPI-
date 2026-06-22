@@ -1,0 +1,21 @@
+# Task List — Carbon DPI Phase 6: Protocol Core Completeness
+
+- `[x]` L8: Establish API Routing Versioning Scheme
+  - `[x]` Prefix routes with `/v1` in `carbon-dpi-reference-node/src/index.ts`
+  - `[x]` Prefix routes with `/v1` in `carbon-dpi-registry/src/index.ts`
+  - `[x]` Prefix routes with `/v1` in `carbon-dpi-event-bus/src/index.ts`
+  - `[x]` Prefix routes with `/v1` in `carbon-dpi-beckn-gateway/src/index.ts`
+  - `[x]` Update `deep_test.js` and tests to route through `/v1` endpoints
+- `[x]` M6: Unified Express Error Handling
+  - `[x]` Implement `becknErrorHandler` middleware in `carbon-dpi-reference-node/src/index.ts`
+  - `[x]` Apply standard error formatting across services to produce Beckn NACKs on error
+- `[x]` H1: Layer 4 Evidence Chain
+  - `[x]` Update `carbon-dpi-reference-node/prisma/schema.prisma` with `EvidencePackage` model
+  - `[x]` Run Prisma migrations/generate client
+  - `[x]` Implement `ClimateEvidenceObject` generation and verification in `sdk.ts`
+  - `[x]` Generate, store, and link `EvidencePackage` during `/confirm` execution
+- `[x]` F1: Mandatory Ed25519 Signing Assertion
+  - `[x]` Force `toW3CVC` in `sdk.ts` to throw hard on missing private key when `NODE_ENV === "production"`
+- `[x]` Verification
+  - `[x]` Run test suites and verify all pass
+  - `[x]` Run `deep_test.js` and ensure successful end-to-end execution

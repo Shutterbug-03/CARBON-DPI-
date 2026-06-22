@@ -1,0 +1,93 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CompositeIdentityHash",
+  "description": "Carbon DPI Protocol — Layer 1. The Composite Identity Hash (CIH) cryptographically binds four critical data points: verified identity, device identity, GPS coordinates, and timestamp. CIH = SHA-256(identityHash ‖ assetId ‖ deviceId ‖ lat ‖ lng ‖ timestamp)",
+  "type": "object",
+  "definitions": {
+    "CIHInput": {
+      "type": "object",
+      "required": ["identity_hash", "asset_id", "device_id", "lat", "lng", "timestamp"],
+      "properties": {
+        "identity_hash": {
+          "type": "string",
+          "description": "SHA-256 hash of the raw credential (GSTIN / Aadhaar Offline XML hash / PAN). No PII is stored.",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "asset_id": {
+          "type": "string",
+          "description": "Unique identifier for the physical asset"
+        },
+        "device_id": {
+          "type": "string",
+          "description": "IoT device / smart meter MAC address or serial number"
+        },
+        "lat": {
+          "type": "number",
+          "minimum": -90,
+          "maximum": 90,
+          "description": "Asset GPS latitude (6 decimal places)"
+        },
+        "lng": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180,
+          "description": "Asset GPS longitude (6 decimal places)"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of binding"
+        }
+      }
+    },
+    "CIHOutput": {
+      "type": "object",
+      "required": ["cih", "entity_id", "asset_id", "device_id", "geolocation", "bound_at"],
+      "properties": {
+        "cih": {
+          "type": "string",
+          "description": "The Composite Identity Hash — 64-character hex SHA-256 output",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "entity_id": { "type": "string" },
+        "asset_id": { "type": "string" },
+        "device_id": { "type": "string" },
+        "geolocation": {
+          "type": "object",
+          "properties": {
+            "lat": { "type": "number" },
+            "lng": { "type": "number" }
+          }
+        },
+        "bound_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "properties": {
+    "input": { "$ref": "#/definitions/CIHInput" },
+    "output": { "$ref": "#/definitions/CIHOutput" }
+  },
+  "examples": [
+    {
+      "input": {
+        "identity_hash": "a7f3c9d2e1b4f8a3c2d1e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6",
+        "asset_id": "SOLAR-GJ-0442",
+        "device_id": "SUN2000-50KTL-M3-SN-20240442",
+        "lat": 23.0225,
+        "lng": 72.5714,
+        "timestamp": "2024-09-15T10:00:00Z"
+      },
+      "output": {
+        "cih": "b9c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2",
+        "entity_id": "ENT-2024-GJ-044821",
+        "asset_id": "SOLAR-GJ-0442",
+        "device_id": "SUN2000-50KTL-M3-SN-20240442",
+        "geolocation": { "lat": 23.0225, "lng": 72.5714 },
+        "bound_at": "2024-09-15T10:00:00Z"
+      }
+    }
+  ]
+}

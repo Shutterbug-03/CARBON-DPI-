@@ -1,0 +1,97 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/@prisma/client-node"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Transaction {
+  transactionId String   @id
+  tenantId      String   @default("default")
+  bapUri        String
+  methodologyId String
+  status        String   @default("INIT")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  dataPoints       DataPoint[]
+  certificates     Certificate[]
+  evidencePackages EvidencePackage[]
+}
+
+model DataPoint {
+  id              String   @id
+  transactionId   String
+  tenantId        String   @default("default")
+  cihReference    String
+  sourceType      String
+  sourceId        String
+  timestamp       String
+  lat             Float
+  lng             Float
+  value           Float
+  unit            String
+  deviceSignature String
+  trustScore      String   @default("HIGH")
+
+  transaction Transaction @relation(fields: [transactionId], references: [transactionId])
+}
+
+model Certificate {
+  gicHash       String   @id
+  gicId         String   @unique
+  transactionId String
+  tenantId      String   @default("default")
+  methodologyId String
+  cihReference  String
+  totalCO2e     Float
+  confidenceScore Int
+  impactType    String   @default("AVOIDED")
+  unit          String   @default("tCO2e")
+  proofValue    String   @default("")
+  w3cVcJson     String   @default("")
+  status        String   @default("ISSUED")
+  revocationReason String?
+  issueDate     DateTime @default(now())
+
+  transaction Transaction @relation(fields: [transactionId], references: [transactionId])
+}
+
+model EvidencePackage {
+  evidenceId          String   @id
+  activityId          String
+  tenantId            String   @default("default")
+  ownerCih            String
+  evidenceType        String
+  rawDataHash         String
+  dataPoints          Int
+  dataCompleteness    Float
+  evidenceSignature   String
+  sourceSystem        String
+  collectionTimestamp DateTime @default(now())
+  schemaVersion       String   @default("1.0.0")
+
+  transaction Transaction @relation(fields: [activityId], references: [transactionId])
+}
+
+model WebhookSubscription {
+  id        String   @id @default(uuid())
+  url       String   @unique
+  events    String   // "GIC_MINTED,GIC_REVOKED"
+  secret    String
+  createdAt DateTime @default(now())
+}
+
+model OutboxEvent {
+  id             String   @id @default(uuid())
+  eventType      String
+  payload        String
+  status         String   @default("PENDING")
+  retryCount     Int      @default(0)
+  nextAttemptAt  DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}

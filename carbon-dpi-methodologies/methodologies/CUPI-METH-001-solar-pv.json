@@ -1,0 +1,92 @@
+{
+  "methodology_id": "CUPI-METH-001",
+  "name": "Grid-Connected Solar PV Generation",
+  "version": "1.0.0",
+  "status": "validated",
+  "external_reference": {
+    "standard": "UNFCCC_CDM",
+    "code": "AMS-I.D",
+    "version": "18",
+    "url": "https://cdm.unfccc.int/methodologies/DB/AIJQ5OBR"
+  },
+  "applicable_activity_types": ["solar_pv_rooftop", "solar_pv_utility"],
+  "sector": "Energy",
+  "impact_type": "AVOIDED",
+  "output_unit": "tCO2e",
+  "baseline_formula": {
+    "description": "Grid electricity displaced by renewable solar generation",
+    "formula": "baseline_emissions = energy_generated_kWh * grid_ef",
+    "final_formula": "tCO2e = (kWh * grid_EF / 1000) * CAF",
+    "variables": {
+      "energy_generated_kWh": {
+        "source": "iot_inverter",
+        "unit": "kWh",
+        "description": "Total energy generated during the monitoring period"
+      },
+      "grid_ef": {
+        "source": "CEA_Baseline_Database",
+        "unit": "kgCO2_per_kWh",
+        "values": {
+          "India-National": 0.716,
+          "India-North": 0.716,
+          "India-South": 0.682,
+          "India-East": 0.821,
+          "India-West": 0.698,
+          "India-Northeast": 0.642
+        },
+        "authority": "Central Electricity Authority, CO2 Baseline Database v19.0, FY2023-24"
+      }
+    }
+  },
+  "adjustment_factors": [
+    {
+      "name": "conservative_adjustment_factor",
+      "value": 0.95,
+      "condition": "Applied universally per UNFCCC CDM EB55 Annex II (5% discount)",
+      "authority": "UNFCCC CDM Executive Board"
+    },
+    {
+      "name": "scope1_diesel_deduction",
+      "formula": "deduction_tCO2e = diesel_litres * 2.68 / 1000",
+      "condition": "Applied when DG set diesel consumption data is available",
+      "authority": "IPCC AR6"
+    }
+  ],
+  "additionality_test": "common_practice_analysis",
+  "leakage_assessment": "not_applicable_grid_connected",
+  "confidence_score_rules": {
+    "max_score": 100,
+    "scoring_weights": {
+      "HIGH_trust_data": 1.0,
+      "MEDIUM_trust_data": 0.6,
+      "LOW_trust_data": 0.0
+    },
+    "minimum_threshold": 30,
+    "deductions": [
+      { "condition": "data_completeness < 1.0", "deduction": "proportional to missing data" },
+      { "condition": "anomaly_flag_count > 0", "deduction_per_flag": 2 },
+      { "condition": "cross_validation_failure", "deduction": 10 }
+    ]
+  },
+  "sample_calculation": {
+    "input": {
+      "energy_generated_kWh": 12850,
+      "grid_region": "India-West",
+      "monitoring_period_days": 92,
+      "data_source": "huawei_fusionsolar_api_v3"
+    },
+    "trace": [
+      { "step": "Aggregate Activity Data", "output": "12850.0000 kWh" },
+      { "step": "Baseline Emissions (raw)", "formula": "12850 × 0.698", "output": "8969.3000 kgCO2" },
+      { "step": "Convert to tCO2e", "formula": "8969.3 / 1000", "output": "8.9693 tCO2e" },
+      { "step": "Apply CAF", "formula": "8.9693 × 0.95", "output": "8.5208 tCO2e (final)" }
+    ],
+    "output": {
+      "verified_tCO2e": 8.5208,
+      "confidence_score": 100
+    }
+  },
+  "version_history": [
+    { "version": "1.0.0", "effective_date": "2025-01-01", "status": "current", "changelog": "Initial methodology encoding" }
+  ]
+}

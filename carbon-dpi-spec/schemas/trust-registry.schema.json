@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spec.carbon-dpi.org/schemas/trust-registry.schema.json",
+  "title": "Carbon DPI Trust Registry Schemas",
+  "description": "Schemas for Device and Verifier Registries in the Carbon DPI Protocol.",
+  "type": "object",
+  "definitions": {
+    "DeviceRegistration": {
+      "type": "object",
+      "properties": {
+        "cihReference": {
+          "type": "string",
+          "description": "The Composite Identity Hash (CIH) binding for this device.",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "sourceType": {
+          "type": "string",
+          "enum": ["IOT_SENSOR", "SATELLITE", "SCADA", "MANUAL_ENTRY", "API_IMPORT", "DOCUMENT_SCAN"],
+          "description": "The type of data source."
+        },
+        "sourceId": {
+          "type": "string",
+          "description": "A unique identifier for the device/source (e.g., Inverter Serial Number)."
+        },
+        "publicKeyBase64": {
+          "type": "string",
+          "description": "Base64 encoded public key (e.g., ECDSA or Ed25519) used to verify CDIF data points from this device."
+        },
+        "geolocation": {
+          "type": "object",
+          "properties": {
+            "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+            "lng": { "type": "number", "minimum": -180, "maximum": 180 }
+          },
+          "required": ["lat", "lng"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ACTIVE", "REVOKED", "SUSPENDED"]
+        },
+        "registeredAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["cihReference", "sourceType", "sourceId", "publicKeyBase64", "geolocation", "status", "registeredAt"]
+    },
+    "VerifierRegistration": {
+      "type": "object",
+      "properties": {
+        "verifierId": {
+          "type": "string",
+          "description": "Unique identifier for the verifier (e.g., carbon-dpi.greenpe.in)."
+        },
+        "name": {
+          "type": "string"
+        },
+        "did": {
+          "type": "string",
+          "description": "Decentralized Identifier (DID) for the verifier."
+        },
+        "accreditedScopes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Sectors or methodology IDs the verifier is accredited to verify."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ACTIVE", "REVOKED", "SUSPENDED"]
+        },
+        "registeredAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["verifierId", "name", "did", "accreditedScopes", "status", "registeredAt"]
+    }
+  }
+}

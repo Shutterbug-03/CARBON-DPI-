@@ -1,0 +1,35 @@
+{
+  "name": "@carbon-dpi/sdk",
+  "version": "1.0.0",
+  "description": "JavaScript/TypeScript SDK for the Carbon DPI protocol",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
+    "test": "jest"
+  },
+  "keywords": [
+    "carbon-dpi",
+    "beckn",
+    "mrv",
+    "climate",
+    "carbon"
+  ],
+  "author": "Carbon DPI Contributors",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^20.19.42",
+    "jest": "^30.4.2",
+    "ts-jest": "^29.4.11",
+    "typescript": "^5.9.3"
+  }
+}
