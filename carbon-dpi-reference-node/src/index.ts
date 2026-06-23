@@ -208,25 +208,52 @@ const becknAuth = async (req: Request, res: Response, next: NextFunction) => {
     return;
   }
 
-  // Fetch the Gateway's public key (in a real system, you'd parse subscriber_id from auth header and lookup)
-  // For simplicity, we use a single known public key or bypass if we don't know it, but here we'll mock Gateway key lookup.
-  // Assuming the Gateway is registered in the Trust Registry... wait, the reference node is the BPP! BAP signed the request.
-  // Carbon DPI Beckn Gateway is the BAP. We should have its public key.
-  const bapPublicKeyBase64 = process.env.BECKN_BAP_PUBLIC_KEY || "dummy"; // Replace in prod
+  // Dynamic key lookup: parse subscriber_id from Authorization header and fetch its
+  // signing public key from the Trust Registry. This replaces the old static env-var bypass.
+  // Falls back gracefully if the registry is unreachable (logs warning, allows through).
+  const keyIdMatch = authHeader.match(/keyId="([^|"]+)/);
+  const subscriberId = keyIdMatch?.[1];
 
-  if (bapPublicKeyBase64 !== "dummy") {
-    const rawBody = JSON.stringify(req.body); // Ideally raw body string from express
+  // Check for a statically configured override key first (for when registry is not available)
+  const staticPublicKey = process.env.BECKN_BAP_PUBLIC_KEY;
+
+  let resolvedPublicKey: string | null = staticPublicKey ?? null;
+
+  if (!resolvedPublicKey && subscriberId) {
+    try {
+      const registryUrl = process.env.REGISTRY_URL ?? "http://localhost:3003";
+      const lookupRes = await fetch(`${registryUrl}/v1/lookup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscriber_id: subscriberId })
+      });
+      if (lookupRes.ok) {
+        const subscribers: any[] = await lookupRes.json();
+        const match = subscribers.find((s: any) => s.subscriber_id === subscriberId && s.status === "SUBSCRIBED");
+        if (match?.signing_public_key) {
+          resolvedPublicKey = match.signing_public_key;
+        }
+      }
+    } catch (lookupErr) {
+      logger.warn({ subscriberId }, "Trust Registry lookup failed during becknAuth — signature verification skipped");
+    }
+  }
+
+  if (resolvedPublicKey) {
+    const rawBody = JSON.stringify(req.body);
     const verification = verifyBecknSignature({
       authorizationHeader: authHeader,
       digestHeader: digestHeader,
       body: rawBody,
-      publicKeyBase64: bapPublicKeyBase64
+      publicKeyBase64: resolvedPublicKey
     });
     
     if (!verification.valid) {
       res.status(401).json({ error: `Beckn Signature Invalid: ${verification.reason}` });
       return;
     }
+  } else {
+    logger.warn({ subscriberId }, "No public key found for subscriber — signature verification skipped (set BECKN_BAP_PUBLIC_KEY or register in Trust Registry)");
   }
 
   next();
@@ -613,7 +640,14 @@ v1Router.post("/confirm", becknAuth, async (req: Request, res: Response, next: N
 
     // Issue GIC + W3C VC (with real Ed25519 signature if key is configured)
     const cihRef = cdifPoints[0]?.cihReference ?? "UNKNOWN";
-    const gic = generateGIC(mrvResult as any, cihRef, GIC_BASE_URL);
+
+    // Compute real monitoring period from the actual data point timestamps
+    const dpTimestamps = cdifPoints.map(p => p.timestamp).filter(Boolean).sort();
+    const monitoringPeriod = dpTimestamps.length >= 2
+      ? { start: dpTimestamps[0].split("T")[0], end: dpTimestamps[dpTimestamps.length - 1].split("T")[0] }
+      : undefined;
+
+    const gic = generateGIC(mrvResult as any, cihRef, GIC_BASE_URL, monitoringPeriod);
     const w3cVC = toW3CVC(gic, ED25519_PRIVATE_KEY, statusListIndex);
 
     // Generate and save Layer 4 Evidence Package
@@ -849,7 +883,7 @@ v1Router.get("/gic/:id", async (req: Request, res: Response, next: NextFunction)
 /** POST /v1/gic/:id/revoke — Admin only */
 v1Router.post("/gic/:id/revoke", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const adminKey = process.env.REGISTRY_ADMIN_KEY ?? "deep_test_admin_key";
+    const adminKey = process.env.REGISTRY_ADMIN_KEY ?? "dev-admin-key";
     if (req.headers["x-api-key"] !== adminKey) {
       res.status(401).json({ error: "Unauthorized" });
       return;
@@ -888,10 +922,14 @@ v1Router.post("/gic/:id/revoke", async (req: Request, res: Response, next: NextF
           gicId,
           reason: reason ?? "No reason provided",
           tenantId: cert.tenantId,
+          // Audit trail: log which admin key authorized this revocation
+          revokedByKeyPrefix: String(req.headers["x-api-key"]).slice(0, 8) + "...",
           timestamp: new Date().toISOString()
         })
       }
     });
+
+    logger.warn({ gicId, tenantId: cert.tenantId, reason, adminKeyPrefix: String(req.headers["x-api-key"]).slice(0, 8) }, "GIC revoked by admin");
 
     gicRevokedTotal.inc({ tenantId: cert.tenantId });
 
@@ -1088,28 +1126,22 @@ async function loadMethodologiesFromRegistry() {
           const baselineFormula = item.baseline_formula || {};
           const variables = baselineFormula.variables || {};
           
-          let primaryVal = 1.0;
-          let primaryUnit = "unit";
-          if (id.includes("001") || id.includes("solar")) {
-            primaryVal = 0.716;
-            primaryUnit = "kgCO2_per_kWh";
-          } else if (id.includes("002") || id.includes("soil")) {
-            primaryVal = 3.67;
-            primaryUnit = "tCO2_per_tC";
-          } else if (id.includes("003") || id.includes("biogas")) {
-            primaryVal = 27.9;
-            primaryUnit = "CO2e_per_tCH4";
-          } else if (id.includes("004") || id.includes("ev")) {
-            primaryVal = 0.192;
-            primaryUnit = "kgCO2_per_km_petrol";
-          } else if (id.includes("005") || id.includes("wind")) {
-            primaryVal = 0.716;
-            primaryUnit = "kgCO2_per_kWh";
-          }
+          // Deterministic emission factor lookup keyed by canonical methodology ID.
+          // String-matching (id.includes("solar")) is fragile and would silently
+          // give wrong emission factors to any new methodology containing those substrings.
+          const CANONICAL_EF_MAP: Record<string, { primary: number; primaryUnit: string; conservativeAdjFactor?: number; secondaryFactors?: Record<string, number> }> = {
+            "CUPI-METH-001": { primary: 0.716, primaryUnit: "kgCO2_per_kWh", conservativeAdjFactor: 0.95 },
+            "CUPI-METH-002": { primary: 3.67, primaryUnit: "tCO2_per_tC", conservativeAdjFactor: 0.90 },
+            "CUPI-METH-003": { primary: 27.9, primaryUnit: "CO2e_per_tCH4", conservativeAdjFactor: 0.95, secondaryFactors: { oxidation_factor: 0.99 } },
+            "CUPI-METH-004": { primary: 0.192, primaryUnit: "kgCO2_per_km_petrol", conservativeAdjFactor: 0.95, secondaryFactors: { ev_kwh_per_km: 0.18, grid_ef: 0.716 } },
+            "CUPI-METH-005": { primary: 0.716, primaryUnit: "kgCO2_per_kWh", conservativeAdjFactor: 0.95 },
+          };
 
-          const primaryValFromJSON = variables.grid_ef?.values?.["India-National"] || 
-                                     variables.primary_factor?.values?.["India-National"] || 
-                                     variables.ch4_gwp?.values?.["India-National"];
+          const knownEF = CANONICAL_EF_MAP[id];
+          if (!knownEF) {
+            logger.warn({ id }, "Unknown methodology ID from Registry — no canonical emission factors found. Skipping.");
+            return null;
+          }
           
           return {
             id,
@@ -1119,14 +1151,11 @@ async function loadMethodologiesFromRegistry() {
             formula: item.formula || baselineFormula.final_formula || "tCO2e = value * EF",
             sourceAuthority: item.sourceAuthority || item.external_reference?.standard || "Carbon DPI",
             applicableAssetTypes: item.applicableAssetTypes || item.applicable_activity_types || ["FACILITY"],
-            emissionFactors: item.emissionFactors || {
-              primary: primaryValFromJSON || primaryVal,
-              primaryUnit: variables.grid_ef?.unit || variables.ch4_gwp?.unit || primaryUnit
-            },
+            emissionFactors: item.emissionFactors || knownEF,
             impactType: item.impactType || item.impact_type || "AVOIDED",
             outputUnit: item.outputUnit || item.output_unit || "tCO2e"
           };
-        });
+        }).filter(Boolean) as any[];
         updateMethodologies(mappedData);
         logger.info(`Loaded ${mappedData.length} methodologies from Registry`);
       } else {

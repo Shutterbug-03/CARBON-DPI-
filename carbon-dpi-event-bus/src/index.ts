@@ -201,9 +201,21 @@ v1Router.post("/ingest", async (req: Request, res: Response, next: NextFunction)
       geolocation: payload.geolocation || { lat: 0, lng: 0 },
       value: parseFloat(payload.value),
       unit: payload.unit || "kWh",
-      deviceSignature: payload.deviceSignature || "unsigned",
+      deviceSignature: payload.deviceSignature,
       tenantId: (req.headers["x-tenant-id"] as string) || payload.tenantId || "default",
     };
+
+    // Security: Explicitly reject unsigned or placeholder signatures.
+    // Passing "unsigned" through would cause a confusing error deep in the verification pipeline.
+    if (!dataPoint.deviceSignature || dataPoint.deviceSignature === "unsigned" || dataPoint.deviceSignature === "MANUAL") {
+      logger.warn({ id: dataPoint.id, sourceId: dataPoint.sourceId }, "Rejected telemetry: missing or placeholder deviceSignature");
+      res.status(400).json({
+        error: "Invalid deviceSignature",
+        detail: "Telemetry must include a valid Ed25519 device signature. Use the Carbon DPI SDK's signTelemetry() function.",
+        code: "UNSIGNED_TELEMETRY_REJECTED"
+      });
+      return;
+    }
 
     // Idempotency Check: Prevent duplicate telemetry processing
     const idempotencyKey = `idemp:${dataPoint.deviceSignature}:${dataPoint.id}`;
@@ -311,23 +323,46 @@ const becknAuth = async (req: Request, res: Response, next: express.NextFunction
     return;
   }
 
-  // Ideally, parse subscriber_id from auth header and lookup public key via Trust Registry
-  // Here we mock the BPP public key fetch
-  const bppPublicKeyBase64 = process.env.BECKN_BPP_PUBLIC_KEY || "dummy"; // Replace in prod
+  // Dynamic key lookup: parse subscriber_id from Authorization header and fetch its
+  // signing public key from the Trust Registry. Falls back to static env-var override.
+  const keyIdMatch = authHeader.match(/keyId="([^|"]+)/);
+  const subscriberId = keyIdMatch?.[1];
+  const staticPublicKey = process.env.BECKN_BPP_PUBLIC_KEY;
+  let resolvedPublicKey: string | null = staticPublicKey ?? null;
 
-  if (bppPublicKeyBase64 !== "dummy") {
+  if (!resolvedPublicKey && subscriberId) {
+    try {
+      const registryUrl = process.env.REGISTRY_URL ?? "http://localhost:3003";
+      const lookupRes = await fetch(`${registryUrl}/v1/lookup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscriber_id: subscriberId })
+      });
+      if (lookupRes.ok) {
+        const subscribers: any[] = await lookupRes.json();
+        const match = subscribers.find((s: any) => s.subscriber_id === subscriberId && s.status === "SUBSCRIBED");
+        if (match?.signing_public_key) resolvedPublicKey = match.signing_public_key;
+      }
+    } catch {
+      logger.warn({ subscriberId }, "Trust Registry lookup failed during event bus becknAuth — verification skipped");
+    }
+  }
+
+  if (resolvedPublicKey) {
     const rawBody = JSON.stringify(req.body);
     const verification = verifyBecknSignature({
       authorizationHeader: authHeader,
       digestHeader: digestHeader,
       body: rawBody,
-      publicKeyBase64: bppPublicKeyBase64
+      publicKeyBase64: resolvedPublicKey
     });
     
     if (!verification.valid) {
       res.status(401).json({ error: `Beckn Signature Invalid: ${verification.reason}` });
       return;
     }
+  } else {
+    logger.warn({ subscriberId }, "No public key resolved for event bus BPP — verification skipped (register subscriber or set BECKN_BPP_PUBLIC_KEY)");
   }
 
   next();
@@ -517,12 +552,37 @@ setInterval(async () => {
     if (!popped) popped = [];
     if (typeof popped === "string") popped = [popped];
     
-    const batch: RawTelemetry[] = popped.map((item: string) => JSON.parse(item));
+    const allItems: RawTelemetry[] = popped.map((item: string) => JSON.parse(item));
 
-    if (batch.length > 0) {
-      console.log(`[EventBus] Processing batch of ${batch.length} telemetry points...`);
-      await orchestrateBecknFlow(batch);
+    if (allItems.length === 0) return;
+
+    // ── CRITICAL FIX: Group by (methodologyId + cihReference + tenantId) ──
+    // This prevents mixing solar kWh data with EV km data or data from different
+    // devices/tenants into a single Beckn verification transaction.
+    const groups = new Map<string, RawTelemetry[]>();
+    for (const item of allItems) {
+      const methodologyId = getMethodology(item.sourceType, item.unit);
+      const tenantId = item.tenantId || "default";
+      const groupKey = `${methodologyId}::${item.cihReference ?? "unknown"}::${tenantId}`;
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, []);
+      }
+      groups.get(groupKey)!.push(item);
     }
+
+    console.log(`[EventBus] Processing ${allItems.length} points across ${groups.size} isolated transaction group(s)...`);
+
+    // Launch one Beckn transaction per group — fully isolated
+    const groupPromises = Array.from(groups.entries()).map(async ([groupKey, batch]) => {
+      console.log(`[EventBus] → Group "${groupKey}": ${batch.length} point(s)`);
+      try {
+        await orchestrateBecknFlow(batch);
+      } catch (err) {
+        console.error(`[EventBus] orchestrateBecknFlow failed for group "${groupKey}":`, err);
+      }
+    });
+
+    await Promise.allSettled(groupPromises);
   } catch (err) {
     console.error("[EventBus] Redis polling error:", err);
   }

@@ -226,21 +226,45 @@ const becknAuth = async (req: Request, res: Response, next: express.NextFunction
     return;
   }
 
-  const bapPublicKeyBase64 = process.env.BECKN_BAP_PUBLIC_KEY || "dummy"; 
+  // Dynamic key lookup: parse subscriber_id from Authorization header and fetch its
+  // signing public key from the Trust Registry. Falls back to static env-var override.
+  const keyIdMatch = authHeader.match(/keyId="([^|"]+)/);
+  const subscriberId = keyIdMatch?.[1];
+  const staticPublicKey = process.env.BECKN_BAP_PUBLIC_KEY;
+  let resolvedPublicKey: string | null = staticPublicKey ?? null;
 
-  if (bapPublicKeyBase64 !== "dummy") {
+  if (!resolvedPublicKey && subscriberId) {
+    try {
+      const lookupRes = await fetch(`${TRUST_REGISTRY_URL}/v1/lookup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscriber_id: subscriberId })
+      });
+      if (lookupRes.ok) {
+        const subscribers: any[] = await lookupRes.json();
+        const match = subscribers.find((s: any) => s.subscriber_id === subscriberId && s.status === "SUBSCRIBED");
+        if (match?.signing_public_key) resolvedPublicKey = match.signing_public_key;
+      }
+    } catch {
+      logger.warn({ subscriberId }, "Trust Registry lookup failed during gateway becknAuth — verification skipped");
+    }
+  }
+
+  if (resolvedPublicKey) {
     const rawBody = JSON.stringify(req.body);
     const verification = verifyBecknSignature({
       authorizationHeader: authHeader,
       digestHeader: digestHeader,
       body: rawBody,
-      publicKeyBase64: bapPublicKeyBase64
+      publicKeyBase64: resolvedPublicKey
     });
     
     if (!verification.valid) {
       res.status(401).json({ error: `Beckn Signature Invalid: ${verification.reason}` });
       return;
     }
+  } else {
+    logger.warn({ subscriberId }, "No public key resolved for gateway BAP — verification skipped (register subscriber or set BECKN_BAP_PUBLIC_KEY)");
   }
 
   next();

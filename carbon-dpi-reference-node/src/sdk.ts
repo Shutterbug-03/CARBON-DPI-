@@ -408,7 +408,9 @@ export function calculateMRV(
     ((trustDist.HIGH * 100 + trustDist.MEDIUM * 60 + trustDist.LOW * 20) / dataPoints.length)
   );
 
-  const auditHash = sha256({ methodologyId, tCO2e, confidenceScore, dataPointCount: dataPoints.length, timestamp: new Date().toISOString() });
+  // Deterministic audit hash — excludes timestamps so identical inputs always produce identical hashes.
+  // This upholds the "deterministic MRV" contract stated in the protocol README.
+  const auditHash = sha256({ methodologyId, tCO2e: parseFloat(tCO2e.toFixed(4)), confidenceScore, dataPointCount: dataPoints.length });
 
   return {
     success: true,
@@ -422,7 +424,7 @@ export function calculateMRV(
   };
 }
 
-export function generateGIC(mrvOutput: MRVOutput, cihReference: string, baseUrl?: string): GreenImpactCertificate {
+export function generateGIC(mrvOutput: MRVOutput, cihReference: string, baseUrl?: string, monitoringPeriod?: { start: string; end: string }): GreenImpactCertificate {
   const year = new Date().getFullYear();
   const hex = sha256(JSON.stringify(mrvOutput)).slice(0, 8).toUpperCase();
   const gicId = `GP-GIC-${year}-${hex}`;
@@ -442,7 +444,12 @@ export function generateGIC(mrvOutput: MRVOutput, cihReference: string, baseUrl?
     issuedAt: new Date().toISOString(),
     verificationUrl: `${verifyBase}/gic/${gicId}`,
     auditTrailHash: mrvOutput.auditHash,
-  };
+    // Carry forward real monitoring period for W3C VC embedding
+    ...(monitoringPeriod ? {
+      monitoringPeriodStart: monitoringPeriod.start,
+      monitoringPeriodEnd: monitoringPeriod.end,
+    } : {}),
+  } as GreenImpactCertificate & { monitoringPeriodStart?: string; monitoringPeriodEnd?: string };
 }
 
 export function toW3CVC(gic: GreenImpactCertificate, privateKeyBase64?: string, statusListIndex?: number) {
@@ -472,11 +479,17 @@ export function toW3CVC(gic: GreenImpactCertificate, privateKeyBase64?: string, 
           source: methodology?.sourceAuthority ?? "Carbon DPI",
         },
       },
-      monitoring_period: {
-        start: gic.issuedAt.split("T")[0],
-        end: gic.issuedAt.split("T")[0],
-        days: 1,
-      },
+      monitoring_period: (() => {
+        // Compute real monitoring period from credentialSubject if data point timestamps
+        // were embedded in the GIC. Falls back to issuance date only if no span available.
+        const rangeStart = (gic as any).monitoringPeriodStart ?? gic.issuedAt.split("T")[0];
+        const rangeEnd = (gic as any).monitoringPeriodEnd ?? gic.issuedAt.split("T")[0];
+        const msPerDay = 86400000;
+        const days = Math.max(1, Math.ceil(
+          (new Date(rangeEnd).getTime() - new Date(rangeStart).getTime()) / msPerDay
+        ) + 1);
+        return { start: rangeStart, end: rangeEnd, days };
+      })(),
       verified_quantity: {
         value: gic.impactValue.amount,
         unit: gic.impactValue.unit,
@@ -502,7 +515,18 @@ export function toW3CVC(gic: GreenImpactCertificate, privateKeyBase64?: string, 
   if (privateKeyBase64) {
     try {
       const { createPrivateKey, sign } = require("node:crypto");
-      const canonicalized = JSON.stringify(credential, Object.keys(credential).sort());
+      // JCS-style recursive sort — matches Python SDK's json.dumps(sort_keys=True) and
+      // ensures cross-language deterministic serialization for W3C VC verification.
+      const recursiveSort = (obj: unknown): unknown => {
+        if (Array.isArray(obj)) return obj.map(recursiveSort);
+        if (obj !== null && typeof obj === "object") {
+          return Object.fromEntries(
+            Object.keys(obj as Record<string, unknown>).sort().map(k => [k, recursiveSort((obj as Record<string, unknown>)[k])])
+          );
+        }
+        return obj;
+      };
+      const canonicalized = JSON.stringify(recursiveSort(credential));
       const privateKeyDer = Buffer.from(privateKeyBase64, "base64");
       const privateKey = createPrivateKey({ key: privateKeyDer, format: "der", type: "pkcs8" });
       proofValue = sign(null, Buffer.from(canonicalized), privateKey).toString("base64");
@@ -580,7 +604,17 @@ export function generateEvidencePackage(
     evidence_type: evidenceType,
     raw_data_hash: rawDataHash,
     data_points: dataPoints.length,
-    data_completeness: 1.0, // 100% completeness since all CDIF points are parsed
+    data_completeness: (() => {
+      // Compute actual data completeness based on monitoring window coverage.
+      // Expected frequency: 1 point per 5 minutes for IoT sensors (288 pts/day).
+      // If fewer points exist, completeness is proportionally lower.
+      if (dataPoints.length === 0) return 0.0;
+      const timestamps = dataPoints.map(p => new Date(p.timestamp).getTime()).filter(t => !isNaN(t)).sort((a, b) => a - b);
+      if (timestamps.length < 2) return 1.0; // Single point — can only assume complete
+      const spanMs = timestamps[timestamps.length - 1] - timestamps[0];
+      const expectedPoints = Math.max(1, Math.ceil(spanMs / (5 * 60 * 1000))); // 5-min IoT cadence
+      return Math.min(1.0, parseFloat((dataPoints.length / expectedPoints).toFixed(4)));
+    })(),
     source_system: sourceSystem,
     collection_timestamp: timestamp,
     schema_version: "1.0.0"

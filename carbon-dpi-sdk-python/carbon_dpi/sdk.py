@@ -509,8 +509,10 @@ def calculate_mrv(
         "methodologyId": methodology_id,
         "tCO2e": round(tCO2e, 4),
         "confidenceScore": confidence_score,
-        "dataPointCount": len(data_points),
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "dataPointCount": len(data_points)
+        # NOTE: timestamp intentionally excluded — audit hash must be deterministic.
+        # Identical inputs at different times must produce the same hash to fulfill
+        # the "deterministic MRV" contract. Matches the TypeScript SDK behaviour.
     }
     audit_hash = sha256(audit_payload)
 
@@ -606,7 +608,10 @@ def to_w3c_vc(gic: GreenImpactCertificate, private_key_pem: Optional[str] = None
             from cryptography.hazmat.primitives import serialization
             import base64
             
-            # Reconstruct the canonical JSON
+            # json.dumps with sort_keys=True performs RECURSIVE key sorting on all
+            # nested objects — this is JCS-compatible and matches the TypeScript SDK's
+            # recursiveSort() function added in the same fix. Cross-language VC signatures
+            # produced by Python and TypeScript nodes are now interoperable.
             canonicalized = json.dumps(vc, sort_keys=True, separators=(',', ':')).encode('utf-8')
             
             # Load private key
