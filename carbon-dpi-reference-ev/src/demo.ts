@@ -1,9 +1,10 @@
-import { 
-    generateDeviceKeypair, 
-    computeCIH, 
-    EventBusClient 
+import {
+    generateDeviceKeypair,
+    computeCIH,
+    EventBusClient
 } from '@carbon-dpi/sdk';
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Carbon DPI — EV Telematics Reference Client
@@ -11,39 +12,80 @@ import { randomUUID } from 'node:crypto';
 
 const TRUST_REGISTRY_URL = process.env.TRUST_REGISTRY_URL || "http://localhost:3003";
 const EVENT_BUS_URL = process.env.EVENT_BUS_URL || "http://localhost:3004";
+const EVENT_BUS_API_KEY = process.env.EVENT_BUS_API_KEY || "default-ingest-key";
+const REGISTRY_ADMIN_KEY = process.env.REGISTRY_ADMIN_KEY || "dev-admin-key";
+const GEOLOCATION = { lat: 12.9716, lng: 77.5946 }; // Bangalore
 
-// The physical device identifier (VIN / Telematics ID)
-const DEVICE_DID = `did:cdpi:india:ev:VIN-${randomUUID().substring(0, 8).toUpperCase()}`;
-const DEVICE_GEOLOCATION = { lat: 12.9716, lng: 77.5946 }; // Bangalore
+const STATE_FILE = ".device-state.json";
 
-async function registerDevice(cih: string, publicKeyBase64: string) {
-    console.log(`\n[EVApp] Registering telematics unit with Trust Registry...`);
-    
+interface DeviceState {
+    cih: string;
+    publicKeyBase64: string;
+    privateKeyPem: string;
+    deviceDid: string;
+    commissionDate: string;
+}
+
+function loadOrCreateDeviceState(): DeviceState {
+    if (existsSync(STATE_FILE)) {
+        console.log(`[EVApp] 🔄 Loading existing device state from ${STATE_FILE}...`);
+        return JSON.parse(readFileSync(STATE_FILE, "utf-8")) as DeviceState;
+    }
+
+    console.log(`[EVApp] 🆕 First boot — generating device identity...`);
+    const keypair = generateDeviceKeypair();
+    const deviceDid = `did:cdpi:india:ev:VIN-${randomUUID().substring(0, 8).toUpperCase()}`;
+    const commissionDate = new Date().toISOString();
+
+    const cih = computeCIH({
+        identityHash: process.env.IDENTITY_HASH || "EV-OWNER-HASH",
+        assetId: "EV-FLEET-001",
+        deviceId: deviceDid,
+        lat: GEOLOCATION.lat,
+        lng: GEOLOCATION.lng,
+        timestamp: commissionDate,  // Fixed at provisioning — never changes on restart
+    });
+
+    const state: DeviceState = { cih, publicKeyBase64: keypair.publicKeyBase64, privateKeyPem: keypair.privateKeyPem, deviceDid, commissionDate };
+    writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+    console.log(`[EVApp] ✅ Device state saved to ${STATE_FILE}`);
+    return state;
+}
+
+async function registerDevice(state: DeviceState): Promise<boolean> {
+    console.log(`\n[EVApp] Checking device registration in Trust Registry...`);
+    try {
+        const checkRes = await fetch(`${TRUST_REGISTRY_URL}/v1/registry/devices/${state.cih}`);
+        if (checkRes.ok) {
+            const device = await checkRes.json();
+            if (device.status === "ACTIVE") {
+                console.log(`[EVApp] ✅ Device already registered and active. Resuming.`);
+                return true;
+            }
+        }
+    } catch { /* not yet registered */ }
+
     try {
         const res = await fetch(`${TRUST_REGISTRY_URL}/v1/registry/devices`, {
             method: "POST",
-            headers: { 
-                "Content-Type": "application/json",
-                "x-api-key": process.env.REGISTRY_ADMIN_KEY || "dev-admin-key"
-            },
+            headers: { "Content-Type": "application/json", "x-api-key": REGISTRY_ADMIN_KEY },
             body: JSON.stringify({
-                cihReference: cih,
+                cihReference: state.cih,
                 sourceType: "EV_TELEMATICS",
-                sourceId: DEVICE_DID,
-                publicKeyBase64: publicKeyBase64,
-                geolocation: DEVICE_GEOLOCATION
+                sourceId: state.deviceDid,
+                publicKeyBase64: state.publicKeyBase64,
+                geolocation: GEOLOCATION
             })
         });
-
-        if (res.status === 201) {
+        if (res.status === 201 || res.status === 200) {
             console.log(`[EVApp] ✅ Telematics officially registered!`);
-        } else {
-            console.error(`[EVApp] ❌ Failed to register hardware:`, await res.text());
-            process.exit(1);
+            return true;
         }
+        console.error(`[EVApp] ❌ Failed to register hardware:`, await res.text());
+        return false;
     } catch (e) {
-        console.error(`[EVApp] ❌ Trust Registry unreachable at ${TRUST_REGISTRY_URL}. Please ensure it is running.`);
-        process.exit(1);
+        console.error(`[EVApp] ❌ Trust Registry unreachable at ${TRUST_REGISTRY_URL}.`);
+        return false;
     }
 }
 
@@ -52,53 +94,32 @@ async function start() {
     console.log("  🚗  Carbon DPI — EV Telematics Simulator");
     console.log("═══════════════════════════════════════════════════════════════");
 
-    // 1. Generate Ed25519 Hardware Keys
-    console.log(`[EVApp] Booting up TCU... generating secure enclave keys...`);
-    const keypair = generateDeviceKeypair();
-    console.log(`[EVApp] Hardware Public Key: ${keypair.publicKeyBase64.substring(0, 40)}...`);
+    const state = loadOrCreateDeviceState();
+    console.log(`[EVApp] Device DID: ${state.deviceDid}`);
+    console.log(`[EVApp] Device CIH: ${state.cih} (stable, from ${state.commissionDate})`);
 
-    // 2. Compute the Composite Identity Hash (CIH)
-    const cih = computeCIH({
-        identityHash: "EV-OWNER-HASH",
-        assetId: "EV-FLEET-001",
-        deviceId: DEVICE_DID,
-        lat: DEVICE_GEOLOCATION.lat,
-        lng: DEVICE_GEOLOCATION.lng,
-        timestamp: new Date().toISOString()
-    });
-    console.log(`[EVApp] Device DID: ${DEVICE_DID}`);
-    console.log(`[EVApp] Device CIH: ${cih}`);
+    const registered = await registerDevice(state);
+    if (!registered) process.exit(1);
 
-    // 3. Register with Trust Registry
-    await registerDevice(cih, keypair.publicKeyBase64);
-
-    // 4. Initialize the Event Bus Client
-    const client = new EventBusClient(EVENT_BUS_URL, cih, keypair.privateKeyPem);
+    const client = new EventBusClient(EVENT_BUS_URL, state.cih, state.privateKeyPem, EVENT_BUS_API_KEY);
 
     console.log(`\n[EVApp] Beginning trip telemetry transmission (1 reading / 5 seconds)...`);
-
-    // 5. Stream telemetry loop
     let totalKm = 0;
 
     setInterval(async () => {
-        // Simulate EV driving (0.1 to 0.5 km per tick)
         const reading = parseFloat((0.1 + Math.random() * 0.4).toFixed(2));
         totalKm += reading;
-
         console.log(`[EVApp] 🚗 Drove ${reading} km (Total Trip: ${totalKm.toFixed(2)} km). Pushing to network...`);
 
         const success = await client.pushTelemetry({
             sourceType: "EV_TELEMATICS",
-            sourceId: DEVICE_DID,
+            sourceId: state.deviceDid,
             timestamp: new Date().toISOString(),
-            geolocation: DEVICE_GEOLOCATION,
+            geolocation: GEOLOCATION,
             value: reading,
             unit: "km"
         });
-
-        if (!success) {
-            console.log(`[EVApp] ⚠️ Failed to push telemetry point.`);
-        }
+        if (!success) console.log(`[EVApp] ⚠️ Failed to push telemetry point.`);
     }, 5000);
 }
 

@@ -112,25 +112,83 @@ sequenceDiagram
 
 ---
 
-## 🛠️ Quick Start & Setup
+## ⚡ Quick Start (5 Minutes to Your First GIC)
 
-The Carbon DPI monorepo is fully functional, supporting both direct local execution (using SQLite) and production-grade deployments (using Docker & PostgreSQL).
+The absolute fastest way to see Carbon DPI in action.
 
-### Prerequisites
-* **Node.js**: `v18+` (LTS recommended)
-* **Docker & Docker Compose** (for database and broker orchestration)
-* **Redis**: Required for local event-bus queuing
+1. **Clone the repo**:
+   ```bash
+   git clone https://github.com/carbon-dpi/carbon-dpi.git
+   cd carbon-dpi
+   ```
+
+2. **Install dependencies**:
+   ```bash
+   npm install
+   ```
+
+3. **Run the 5-Minute Setup script**:
+   ```bash
+   npm run setup
+   ```
+
+   **What this does**:
+   - Generates Ed25519 keys (Base64 DER) and creates your `.env`
+   - Runs `prisma db push` to initialize local SQLite databases
+   - Starts all 4 core services (Registry, Gateway, Event Bus, Node)
+   - Registers a test Solar Inverter device with the Trust Registry
+   - Streams a batch of telemetry through the Event Bus
+   - Issues your first cryptographically verifiable Green Impact Certificate!
 
 ---
 
-### Method A: Production-Grade Deployment (Docker Compose)
+## 🛠️ Manual Setup & Configuration
+
+The Carbon DPI monorepo supports both direct local execution (using SQLite) and production-grade deployments (using Docker & PostgreSQL).
+
+### Prerequisites
+* **Node.js**: `v18+` (LTS recommended)
+* **Redis**: Required for local event-bus queuing
+* **Docker & Docker Compose** (optional, for production Postgres setup)
+
+---
+
+### Generating Keys
+
+Before running manually or via Docker, you must generate Ed25519 keys for your Reference Node to sign W3C VCs.
+
+```bash
+npm run keygen
+```
+*Copy the generated `BECKN_ED25519_PRIVATE_KEY` and `BECKN_ED25519_PUBLIC_KEY` into your `.env` file. These are Base64-encoded DER (PKCS8/SPKI) formats.*
+
+---
+
+### Method A: Local Development Setup (SQLite)
+Perfect for testing and lightweight local debugging without full Postgres overhead.
+
+1. **Install Dependencies**:
+   ```bash
+   npm install
+   ```
+
+2. **Launch Dev Server (Turbo Live-Reload)**:
+   Ensure a local Redis server is running (`redis-server`), then run:
+   ```bash
+   npm run dev
+   ```
+   *(Note: `npm run dev` automatically runs database migrations via `predev`)*
+
+---
+
+### Method B: Production-Grade Deployment (Docker Compose)
 This spins up PostgreSQL databases (automatically seeded), Redis queue, the Trust Registry, Beckn Gateway, Event Bus with MQTT, and a reference Verifier Node.
 
 1. **Configure Environment Variables**:
-   Create a root `.env` file or export variables:
+   Create a root `.env` file:
    ```bash
-   BECKN_ED25519_PRIVATE_KEY=385c98d6cbf... # Ed25519 Hex-encoded private key
-   BECKN_ED25519_PUBLIC_KEY=8a93a8d6fbc...  # Ed25519 Hex-encoded public key
+   BECKN_ED25519_PRIVATE_KEY=your_generated_base64_der_private_key
+   BECKN_ED25519_PUBLIC_KEY=your_generated_base64_der_public_key
    ```
 
 2. **Launch Ecosystem**:
@@ -143,36 +201,6 @@ This spins up PostgreSQL databases (automatically seeded), Redis queue, the Trus
    * **Verifier Node**: `http://localhost:3001` (mapped to `3099` for testing)
    * **Beckn Gateway**: `http://localhost:3005`
    * **Event Ingest/MQTT Broker**: `http://localhost:3004` & `mqtt://localhost:1883`
-
----
-
-### Method B: Local Development Setup (SQLite)
-Perfect for testing and lightweight local debugging without full Postgres overhead.
-
-1. **Install Dependencies**:
-   ```bash
-   npm install
-   ```
-
-2. **Generate Prisma Clients**:
-   Carbon DPI isolates database schemas dynamically. Run client generator to generate independent SQLite clients:
-   ```bash
-   # Generates clients for registry and verifier node
-   npm run build
-   ```
-
-3. **Run Database Migrations**:
-   Ensure SQLite databases are set up locally in their respective packages:
-   ```bash
-   cd carbon-dpi-registry && npx prisma db push
-   cd ../carbon-dpi-reference-node && npx prisma db push
-   ```
-
-4. **Launch Dev Server (Turbo Live-Reload)**:
-   Ensure a local Redis server is running (`redis-server`), then run:
-   ```bash
-   npm run dev
-   ```
 
 ---
 

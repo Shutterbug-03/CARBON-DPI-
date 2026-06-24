@@ -9,7 +9,50 @@ import pino from "pino";
 import pinoHttp from "pino-http";
 import client from "prom-client";
 import { gzipSync } from "node:zlib";
+import { createPublicKey } from "node:crypto";
 import { DeviceRegistration, VerifierRegistration } from "./types";
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Converts a Base64-encoded SPKI DER Ed25519 public key to W3C DID-compliant
+ * publicKeyMultibase format: 'z' prefix (multibase) + base58btc encoded raw key bytes.
+ *
+ * Background: SPKI DER for Ed25519 has a 12-byte header before the 32-byte raw key.
+ * W3C DID spec (Ed25519VerificationKey2020) requires the raw 32-byte key encoded
+ * in base58btc with a 'z' multibase prefix, NOT the full SPKI DER.
+ */
+function spkiDerToMultibase(publicKeyBase64: string): string {
+  try {
+    const derBuf = Buffer.from(publicKeyBase64, "base64");
+    // Extract raw 32-byte Ed25519 public key from SPKI DER
+    // SPKI header for Ed25519 is always exactly 12 bytes
+    const rawKey = derBuf.slice(12);
+    return "z" + base58btcEncode(rawKey);
+  } catch {
+    // Fallback: return as-is if conversion fails (shouldn't happen in prod)
+    return publicKeyBase64;
+  }
+}
+
+/** Base58 Bitcoin alphabet encoder */
+function base58btcEncode(buf: Buffer): string {
+  const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  let num = BigInt(`0x${buf.toString("hex")}`);
+  let encoded = "";
+  while (num > 0n) {
+    const rem = num % 58n;
+    num = num / 58n;
+    encoded = ALPHABET[Number(rem)] + encoded;
+  }
+  for (const byte of buf) {
+    if (byte !== 0) break;
+    encoded = "1" + encoded;
+  }
+  return encoded;
+}
 
 dotenv.config();
 
@@ -331,13 +374,14 @@ app.get("/1.0/identifiers/:did", async (req: Request, res: Response) => {
         return;
       }
       res.status(200).json({
-        "@context": ["https://www.w3.org/ns/did/v1"],
+        "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/suites/ed25519-2020/v1"],
         id: did,
         verificationMethod: [{
           id: `${did}#key-1`,
           type: "Ed25519VerificationKey2020",
           controller: did,
-          publicKeyMultibase: device.publicKeyBase64
+          // W3C DID spec requires multibase (z + base58btc raw key bytes), NOT raw Base64 DER
+          publicKeyMultibase: spkiDerToMultibase(device.publicKeyBase64)
         }]
       });
       return;
@@ -472,18 +516,26 @@ async function seedDatabase() {
     }
   });
 
-  await prisma.subscriber.upsert({
-    where: { subscriber_id: "carbon-dpi.greenpe.in" },
-    update: {},
-    create: {
-      subscriber_id: "carbon-dpi.greenpe.in",
-      subscriber_url: process.env.REFERENCE_NODE_URL ?? "http://localhost:3001",
-      type: "BPP",
-      signing_public_key: process.env.BECKN_ED25519_PUBLIC_KEY ?? "dummy_pub_key",
-      valid_until: new Date("2030-01-01T00:00:00Z"),
-      status: "SUBSCRIBED"
-    }
-  });
+  const becknPublicKey = process.env.BECKN_ED25519_PUBLIC_KEY;
+  if (!becknPublicKey) {
+    logger.warn(
+      "BECKN_ED25519_PRIVATE_KEY / BECKN_ED25519_PUBLIC_KEY not set — " +
+      "Beckn subscriber seed skipped. Run 'npm run keygen' and set the keys in .env."
+    );
+  } else {
+    await prisma.subscriber.upsert({
+      where: { subscriber_id: "carbon-dpi.greenpe.in" },
+      update: {},
+      create: {
+        subscriber_id: "carbon-dpi.greenpe.in",
+        subscriber_url: process.env.REFERENCE_NODE_URL ?? "http://localhost:3001",
+        type: "BPP",
+        signing_public_key: becknPublicKey,
+        valid_until: new Date("2030-01-01T00:00:00Z"),
+        status: "SUBSCRIBED"
+      }
+    });
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

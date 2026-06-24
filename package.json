@@ -14,6 +14,10 @@
     "carbon-dpi-reference-msme"
   ],
   "scripts": {
+    "setup": "node scripts/setup.js",
+    "db:setup": "cd carbon-dpi-registry && npx prisma db push && cd ../carbon-dpi-reference-node && npx prisma db push",
+    "predev": "npm run db:setup",
+    "keygen": "cd carbon-dpi-reference-node && node -e \"const { generateKeyPairSync } = require('node:crypto'); const { publicKey, privateKey } = generateKeyPairSync('ed25519'); console.log('BECKN_ED25519_PRIVATE_KEY=' + privateKey.export({type: 'pkcs8', format: 'der'}).toString('base64')); console.log('BECKN_ED25519_PUBLIC_KEY=' + publicKey.export({type: 'spki', format: 'der'}).toString('base64'));\"",
     "build": "turbo run build",
     "dev": "turbo run dev",
     "test": "turbo run test"

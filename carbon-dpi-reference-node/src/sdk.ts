@@ -459,7 +459,10 @@ export function toW3CVC(gic: GreenImpactCertificate, privateKeyBase64?: string, 
   const credential: Record<string, unknown> = {
     "@context": [
       "https://www.w3.org/2018/credentials/v1",
-      "https://spec.carbon-dpi.org/contexts/gic/v1",
+      // Inline @vocab until https://spec.carbon-dpi.org/contexts/gic/v1 is published.
+      // This is W3C VC-compliant and allows offline JSON-LD expansion without
+      // requiring a live context endpoint.
+      { "@vocab": "https://schema.carbon-dpi.org/gic/v1#" },
     ],
     id: gic.verificationUrl,
     type: ["VerifiableCredential", "GreenImpactCertificate"],
@@ -587,7 +590,7 @@ export function generateEvidencePackage(
   privateKeyBase64?: string
 ): ClimateEvidenceObject {
   const timestamp = new Date().toISOString();
-  const evidenceId = generateEvidenceId(methodologyId, timestamp);
+  const evidenceId = generateEvidenceId(methodologyId, timestamp, transactionId);
   const evidenceType = getEvidenceType(methodologyId);
   
   // Format raw data hash
@@ -620,18 +623,40 @@ export function generateEvidencePackage(
     schema_version: "1.0.0"
   };
 
-  let evidenceSignature = `ed25519:abcdef0123456789abcdef0123456789`;
+  let evidenceSignature: string;
   if (privateKeyBase64) {
     try {
       const { createPrivateKey, sign } = require("node:crypto");
-      const canonicalized = JSON.stringify(baseEvidence, Object.keys(baseEvidence).sort());
+      // Use JCS recursive sort — matches SDK jcsStringify() and Python SDK sort_keys=True
+      const jcsSort = (v: unknown): unknown => {
+        if (Array.isArray(v)) return v.map(jcsSort);
+        if (v !== null && typeof v === "object") {
+          return Object.fromEntries(Object.keys(v as Record<string, unknown>).sort().map(k => [k, jcsSort((v as Record<string, unknown>)[k])]));
+        }
+        return v;
+      };
+      const canonicalized = JSON.stringify(jcsSort(baseEvidence));
       const privateKeyDer = Buffer.from(privateKeyBase64, "base64");
       const privateKey = createPrivateKey({ key: privateKeyDer, format: "der", type: "pkcs8" });
       const signature = sign(null, Buffer.from(canonicalized), privateKey);
       evidenceSignature = `ed25519:${signature.toString("hex")}`;
     } catch (e) {
-      // Fallback
+      // Key is malformed — should not happen in production
+      evidenceSignature = `ed25519:SIGNING_ERROR`;
     }
+  } else {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("BECKN_ED25519_PRIVATE_KEY is mandatory in production for evidence package signing.");
+    }
+    // No key — emit the same loud warning as toW3CVC()
+    console.error("===============================================================");
+    console.error("🚨 CRITICAL SECURITY WARNING 🚨");
+    console.error("No Ed25519 private key provided to generateEvidencePackage().");
+    console.error("Evidence package is being issued with a PLACEHOLDER signature.");
+    console.error("This is invalid and will fail any audit verification.");
+    console.error("Provide BECKN_ED25519_PRIVATE_KEY in production!");
+    console.error("===============================================================");
+    evidenceSignature = `ed25519:PLACEHOLDER_NO_KEY_CONFIGURED`;
   }
 
   return {
@@ -640,23 +665,24 @@ export function generateEvidencePackage(
   };
 }
 
-export function generateEvidenceId(methodologyId: string, timestamp: string): string {
+export function generateEvidenceId(methodologyId: string, timestamp: string, transactionId?: string): string {
   const date = new Date(timestamp);
   const year = date.getFullYear();
   const month = date.getMonth() + 1;
   const quarter = `Q${Math.ceil(month / 3)}`;
-  
+
   let sector = "SOL";
   if (methodologyId === "CUPI-METH-002") sector = "AGR";
   if (methodologyId === "CUPI-METH-003") sector = "BIO";
   if (methodologyId === "CUPI-METH-004") sector = "EVF";
   if (methodologyId === "CUPI-METH-005") sector = "WND";
 
-  // Random 4 digits + 3 digits to satisfy regex length constraints
-  const deviceIdPart = Math.floor(1000 + Math.random() * 9000);
-  const seqPart = Math.floor(100 + Math.random() * 900);
+  // Deterministic hash derived from stable inputs — reproducible across nodes
+  // for the same transaction. No Math.random() — evidence IDs must be auditable.
+  const seedStr = `${transactionId ?? "unknown"}:${methodologyId}:${year}:${quarter}`;
+  const hashHex = sha256(seedStr).slice(0, 8).toUpperCase();
 
-  return `EVD-${year}-IN-${sector}-${deviceIdPart}-${quarter}-${seqPart}`;
+  return `EVD-${year}-IN-${sector}-${hashHex}-${quarter}`;
 }
 
 export function getEvidenceType(methodologyId: string): string {

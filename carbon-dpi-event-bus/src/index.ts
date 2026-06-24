@@ -262,27 +262,66 @@ v1Router.post("/ingest", async (req: Request, res: Response, next: NextFunction)
 // State Management Helpers
 // ──────────────────────────────────────────────────────────────────────────────
 
-const getMethodology = (sourceType: string, unit: string) => {
-  const st = sourceType.toUpperCase();
-  const u = unit.toLowerCase();
-  
-  if (u === "kwh") {
-    if (st === "SMART_METER" || st === "WIND_SENSOR" || st === "WIND_TURBINE") {
-      return "CUPI-METH-005"; // Grid-Connected Wind
+const SOURCE_TYPE_TO_METHODOLOGY: Record<string, string> = {
+  "SOLAR_INVERTER":   "CUPI-METH-001",
+  "WIND_TURBINE":     "CUPI-METH-005",
+  "WIND_SENSOR":      "CUPI-METH-005",
+  "SMART_METER":      "CUPI-METH-005",
+  "EV_TELEMATICS":    "CUPI-METH-004",
+  "BIOGAS_FLOW_METER":"CUPI-METH-003",
+  "SOIL_PROBE":       "CUPI-METH-002",
+};
+
+// Fallback heuristic (only used if Trust Registry is unreachable)
+const UNIT_TO_METHODOLOGY_FALLBACK: Record<string, string> = {
+  "kwh": "CUPI-METH-001",
+  "km":  "CUPI-METH-004",
+  "mi":  "CUPI-METH-004",
+  "m3":  "CUPI-METH-003",
+  "m\u00b3": "CUPI-METH-003",
+  "tc":  "CUPI-METH-002",
+  "tc_per_ha": "CUPI-METH-002",
+};
+
+/**
+ * Resolves the correct MRV methodology for a device.
+ *
+ * SECURITY: Methodology is locked to the device's REGISTERED sourceType in
+ * the Trust Registry. The telemetry unit is NOT trusted for methodology
+ * selection — a device registered as SOLAR_INVERTER always gets CUPI-METH-001
+ * regardless of what unit it sends in its telemetry payload.
+ *
+ * Falls back to unit-based heuristic only if Trust Registry is unreachable.
+ * Result is cached in Redis for 5 minutes to reduce Registry load.
+ */
+const getMethodologyForDevice = async (cihRef: string, unitFallback: string): Promise<string> => {
+  // 1. Check Redis cache (5-min TTL)
+  const cacheKey = `meth:${cihRef}`;
+  const cached = await redis.get(cacheKey);
+  if (cached) return cached;
+
+  // 2. Fetch device's registered sourceType from Trust Registry
+  try {
+    const registryUrl = process.env.REGISTRY_URL ?? "http://localhost:3003";
+    const res = await fetch(`${registryUrl}/v1/registry/devices/${cihRef}`);
+    if (res.ok) {
+      const device = await res.json();
+      const sourceType = (device.sourceType ?? "").toUpperCase();
+      const methodology = SOURCE_TYPE_TO_METHODOLOGY[sourceType];
+      if (methodology) {
+        // Cache for 5 minutes
+        await redis.set(cacheKey, methodology, "EX", 300);
+        return methodology;
+      }
     }
-    return "CUPI-METH-001"; // Grid-Connected Solar
+  } catch (err) {
+    logger.warn({ cihRef }, "Trust Registry lookup for methodology failed — using unit fallback");
   }
-  if (u === "km" || u === "mi") {
-    return "CUPI-METH-004"; // EV Fleet — Avoided Tailpipe Emissions
-  }
-  if (u === "m3" || u === "m³") {
-    return "CUPI-METH-003"; // Biogas / Methane Capture
-  }
-  if (u === "tc" || u === "tc_per_ha") {
-    return "CUPI-METH-002"; // Soil Carbon Sequestration
-  }
-  
-  return "CUPI-METH-001"; // Default fallback
+
+  // 3. Fallback to unit heuristic (Trust Registry unreachable)
+  const methodology = UNIT_TO_METHODOLOGY_FALLBACK[unitFallback.toLowerCase()] ?? "CUPI-METH-001";
+  // Do NOT cache fallback — retry the registry on next request
+  return methodology;
 };
 
 const sendToGateway = async (path: string, body: any, tenantId?: string) => {
@@ -527,7 +566,7 @@ async function orchestrateBecknFlow(batch: RawTelemetry[]) {
     trustScore: "HIGH"
   }));
 
-  const methodologyId = getMethodology(batch[0].sourceType, batch[0].unit);
+  const methodologyId = await getMethodologyForDevice(batch[0].cihReference, batch[0].unit);
   const tenantId = batch[0]?.tenantId || "default";
 
   console.log(`[EventBus] Initiating Beckn flow for TX ${txId} using ${methodologyId} (${batch.length} points)`);

@@ -453,7 +453,8 @@ v1Router.post("/select", becknAuth, async (req: Request, res: Response, next: Ne
         return;
       }
 
-      // Reconstruct the exact base payload that the device signed
+      // Reconstruct the exact base payload that the device signed.
+      // Uses JCS-compatible recursive sort — MUST match the SDK's jcsStringify().
       const basePayload = {
           id: point.id,
           cihReference: point.cihReference,
@@ -464,8 +465,18 @@ v1Router.post("/select", becknAuth, async (req: Request, res: Response, next: Ne
           value: point.value,
           unit: point.unit
       };
-      
-      const payloadStr = JSON.stringify(basePayload, Object.keys(basePayload).sort());
+
+      const jcsRecursiveSort = (v: unknown): unknown => {
+        if (Array.isArray(v)) return v.map(jcsRecursiveSort);
+        if (v !== null && typeof v === "object") {
+          return Object.fromEntries(
+            Object.keys(v as Record<string, unknown>).sort()
+              .map(k => [k, jcsRecursiveSort((v as Record<string, unknown>)[k])])
+          );
+        }
+        return v;
+      };
+      const payloadStr = JSON.stringify(jcsRecursiveSort(basePayload));
       const dataBuffer = Buffer.from(payloadStr);
 
       try {
