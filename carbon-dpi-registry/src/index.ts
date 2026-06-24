@@ -14,17 +14,38 @@ import { DeviceRegistration, VerifierRegistration } from "./types";
 dotenv.config();
 
 const app = express();
-const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS ? process.env.CORS_ALLOWED_ORIGINS.split(",") : ["http://localhost:3000", "http://localhost:3001"];
+const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
+  ? process.env.CORS_ALLOWED_ORIGINS.split(",").map(o => o.trim())
+  : ["http://localhost:3000", "http://localhost:3001", "http://localhost:3004"];
+
 app.use(cors({
-  origin: function(origin, callback) {
+  origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      callback(new Error(`CORS: origin '${origin}' not allowed`));
     }
-  }
+  },
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "Digest", "x-api-key", "x-tenant-id"],
+  credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: "512kb" }));
+
+// Per-tenant rate limiting — each tenant gets its own 100 req/min quota
+const tenantRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  message: { error: "Too many requests — per-tenant quota exceeded" },
+  keyGenerator: (req) => {
+    const tenantId = req.headers["x-tenant-id"] as string | undefined;
+    return tenantId?.trim() || req.ip || "unknown";
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use(tenantRateLimiter);
 
 const PORT = parseInt(process.env.PORT ?? "3003", 10);
 const LOG_LEVEL = process.env.LOG_LEVEL ?? "info";

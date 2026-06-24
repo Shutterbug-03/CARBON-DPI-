@@ -1,6 +1,52 @@
 version: '3.8'
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Carbon DPI — Production-hardened docker-compose
+#
+# TLS Architecture:
+#   External:  Caddy handles TLS termination for all public-facing services.
+#              Set DOMAIN=yourdomain.com and ACME_EMAIL=you@domain.com in .env
+#              to get automatic Let's Encrypt certificates.
+#
+#   Internal:  All service-to-service communication stays on the cdpi-network
+#              private bridge. INTERNAL_TLS=true enables mutual TLS for
+#              inter-service calls using the shared certs in ./certs/internal/.
+#              Run `make gen-certs` to generate dev self-signed certs.
+#
+# CORS:        Set CORS_ALLOWED_ORIGINS in .env to your production domain(s).
+#              Example: CORS_ALLOWED_ORIGINS=https://app.yourdomain.com
+#
+# Rate Limits: Per-tenant (x-tenant-id header) quotas. Each tenant gets its
+#              own independent request pool.
+# ──────────────────────────────────────────────────────────────────────────────
+
 services:
+
+  # ── Caddy: TLS terminator + reverse proxy ────────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    container_name: cdpi-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3 QUIC
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - cdpi-network
+    depends_on:
+      - registry
+      - reference-node
+      - gateway
+      - event-bus
+    restart: unless-stopped
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+      - ACME_EMAIL=${ACME_EMAIL:-admin@localhost}
+
+  # ── Trust Registry (:3003) ───────────────────────────────────────────────────
   registry:
     build:
       context: ./carbon-dpi-registry
@@ -10,18 +56,32 @@ services:
       - "3003:3003"
     environment:
       - PORT=3003
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/cdpi_registry
-      - LOG_LEVEL=debug
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/cdpi_registry
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - REGISTRY_ADMIN_KEY=${REGISTRY_ADMIN_KEY:-dev-admin-key}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:3001,http://localhost:3004}
+      # Internal TLS: set to true to enable mTLS for inter-service calls
+      - INTERNAL_TLS=${INTERNAL_TLS:-false}
+      - INTERNAL_TLS_CA=/certs/internal/ca.crt
+      - INTERNAL_TLS_CERT=/certs/internal/registry.crt
+      - INTERNAL_TLS_KEY=/certs/internal/registry.key
     volumes:
       - registry_data:/data
-      - ./carbon-dpi-methodologies/methodologies:/carbon-dpi-methodologies/methodologies
+      - ./carbon-dpi-methodologies/methodologies:/carbon-dpi-methodologies/methodologies:ro
+      - ./certs/internal:/certs/internal:ro
     networks:
       - cdpi-network
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3003/heartbeat | grep -q UP || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
+  # ── Reference Node / BPP (:3001) ─────────────────────────────────────────────
   reference-node:
     build:
       context: ./carbon-dpi-reference-node
@@ -29,19 +89,30 @@ services:
     container_name: cdpi-reference-node
     ports:
       - "3001:3001"
-      - "3099:3001" # Host port 3099 mapped to container 3001 to support old tests
+      - "3099:3001"  # Legacy test port
     environment:
       - PORT=3001
-      - BECKN_SUBSCRIBER_ID=carbon-dpi.greenpe.in
-      - BECKN_SHARED_SECRET=reference-node-secret
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/cdpi_node
-      - LOG_LEVEL=debug
-      - REGISTRY_URL=http://registry:3003
-      - BECKN_ED25519_PRIVATE_KEY=${BECKN_ED25519_PRIVATE_KEY}
-      - BECKN_ED25519_PUBLIC_KEY=${BECKN_ED25519_PUBLIC_KEY}
-      - BECKN_BAP_PUBLIC_KEY=${BECKN_BAP_PUBLIC_KEY}
+      - BECKN_SUBSCRIBER_ID=${BECKN_SUBSCRIBER_ID:-carbon-dpi.greenpe.in}
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/cdpi_node
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - REGISTRY_URL=${REGISTRY_URL:-http://registry:3003}
+      - GIC_BASE_URL=${GIC_BASE_URL:-http://localhost:3001/v1}
+      - REGISTRY_ADMIN_KEY=${REGISTRY_ADMIN_KEY:-dev-admin-key}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:3001,http://localhost:3004}
+      # Ed25519 signing keys — REQUIRED in production
+      # Generate with: cd carbon-dpi-reference-node && npm run keygen
+      - BECKN_ED25519_PRIVATE_KEY=${BECKN_ED25519_PRIVATE_KEY:-}
+      - BECKN_ED25519_PUBLIC_KEY=${BECKN_ED25519_PUBLIC_KEY:-}
+      - BECKN_BAP_PUBLIC_KEY=${BECKN_BAP_PUBLIC_KEY:-}
+      - BECKN_UNIQUE_KEY_ID=${BECKN_UNIQUE_KEY_ID:-key-1}
+      # Internal TLS
+      - INTERNAL_TLS=${INTERNAL_TLS:-false}
+      - INTERNAL_TLS_CA=/certs/internal/ca.crt
+      - INTERNAL_TLS_CERT=/certs/internal/node.crt
+      - INTERNAL_TLS_KEY=/certs/internal/node.key
     volumes:
       - node_data:/data
+      - ./certs/internal:/certs/internal:ro
     networks:
       - cdpi-network
     depends_on:
@@ -49,37 +120,53 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3001/heartbeat | grep -q UP || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
+  # ── Redis ─────────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: cdpi-redis
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-cdpi-redis-pass}", "--appendonly", "yes"]
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
     networks:
       - cdpi-network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-cdpi-redis-pass}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
+  # ── PostgreSQL ────────────────────────────────────────────────────────────────
   postgres:
     image: postgres:15-alpine
     container_name: cdpi-postgres
     ports:
       - "5432:5432"
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - POSTGRES_MULTIPLE_DATABASES=cdpi_registry,cdpi_node
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init-multiple-databases.sh:/docker-entrypoint-initdb.d/init-multiple-databases.sh
+      - ./init-multiple-databases.sh:/docker-entrypoint-initdb.d/init-multiple-databases.sh:ro
     networks:
       - cdpi-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 5s
       timeout: 5s
       retries: 5
     restart: unless-stopped
 
+  # ── Beckn Gateway (:3005) ─────────────────────────────────────────────────────
   gateway:
     build:
       context: ./carbon-dpi-beckn-gateway
@@ -89,14 +176,33 @@ services:
       - "3005:3005"
     environment:
       - PORT=3005
-      - LOG_LEVEL=debug
-      - REFERENCE_NODE_URL=http://reference-node:3001
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - REFERENCE_NODE_URL=${REFERENCE_NODE_URL:-http://reference-node:3001}
+      - TRUST_REGISTRY_URL=${TRUST_REGISTRY_URL:-http://registry:3003}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:3001,http://localhost:3004}
+      - BECKN_GATEWAY_SUBSCRIBER_ID=${BECKN_GATEWAY_SUBSCRIBER_ID:-gateway.carbon-dpi.in}
+      - BECKN_GATEWAY_PRIVATE_KEY=${BECKN_GATEWAY_PRIVATE_KEY:-}
+      - BECKN_BAP_PUBLIC_KEY=${BECKN_BAP_PUBLIC_KEY:-}
+      # Internal TLS
+      - INTERNAL_TLS=${INTERNAL_TLS:-false}
+      - INTERNAL_TLS_CA=/certs/internal/ca.crt
+      - INTERNAL_TLS_CERT=/certs/internal/gateway.crt
+      - INTERNAL_TLS_KEY=/certs/internal/gateway.key
+    volumes:
+      - ./certs/internal:/certs/internal:ro
     networks:
       - cdpi-network
     depends_on:
-      - reference-node
+      reference-node:
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3005/heartbeat | grep -q UP || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
+  # ── Event Bus (:3004, MQTT :1883) ─────────────────────────────────────────────
   event-bus:
     build:
       context: ./carbon-dpi-event-bus
@@ -105,24 +211,44 @@ services:
     ports:
       - "3004:3004"
       - "1883:1883"
+      - "8883:8883"   # MQTT over TLS
     environment:
       - PORT=3004
-      - LOG_LEVEL=debug
-      - BAP_URI=http://event-bus:3004
-      - REDIS_URL=redis://redis:6379
-      - BECKN_GATEWAY_URL=http://gateway:3005
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - BAP_URI=${BAP_URI:-http://event-bus:3004}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-cdpi-redis-pass}@redis:6379
+      - BECKN_GATEWAY_URL=${BECKN_GATEWAY_URL:-http://gateway:3005}
+      - REGISTRY_URL=${REGISTRY_URL:-http://registry:3003}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:3001,http://localhost:3004}
+      - BECKN_SUBSCRIBER_ID=${BECKN_SUBSCRIBER_ID:-carbon-dpi-event-bus}
+      - BECKN_ED25519_PRIVATE_KEY=${BECKN_ED25519_PRIVATE_KEY:-}
+      # Internal TLS
+      - INTERNAL_TLS=${INTERNAL_TLS:-false}
+      - INTERNAL_TLS_CA=/certs/internal/ca.crt
+      - INTERNAL_TLS_CERT=/certs/internal/event-bus.crt
+      - INTERNAL_TLS_KEY=/certs/internal/event-bus.key
+    volumes:
+      - ./certs/internal:/certs/internal:ro
     networks:
       - cdpi-network
     depends_on:
-      - gateway
-      - redis
+      gateway:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
   registry_data:
   node_data:
   postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
 
 networks:
   cdpi-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24

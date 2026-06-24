@@ -1,5 +1,7 @@
 import express, { Request, Response, NextFunction } from "express";
 import * as crypto from "node:crypto";
+import cors from "cors";
+import dotenv from "dotenv";
 import { PrismaClient } from "@prisma/client-node";
 import { z } from "zod";
 import rateLimit from "express-rate-limit";
@@ -26,6 +28,8 @@ import {
   verifyBecknSignature
 } from "@carbon-dpi/beckn-adapter";
 
+dotenv.config();
+
 const prisma = new PrismaClient();
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -33,7 +37,29 @@ const prisma = new PrismaClient();
 // ──────────────────────────────────────────────────────────────────────────────
 
 const app = express();
-app.use(express.json());
+
+// ── CORS: production-safe configurable allowed origins ──────────────────────
+// Set CORS_ALLOWED_ORIGINS="https://app.yourdomain.com,https://api.yourdomain.com"
+// in production. Defaults to localhost ports for local dev.
+const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
+  ? process.env.CORS_ALLOWED_ORIGINS.split(",").map(o => o.trim())
+  : ["http://localhost:3000", "http://localhost:3001", "http://localhost:3004"];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow server-to-server calls (no origin header) and listed origins
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS: origin '${origin}' not allowed`));
+    }
+  },
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "Digest", "x-api-key", "x-tenant-id"],
+  credentials: true,
+}));
+
+app.use(express.json({ limit: "1mb" }));
 
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
 const SUBSCRIBER_ID = process.env.BECKN_SUBSCRIBER_ID ?? "carbon-dpi.greenpe.in";
@@ -48,13 +74,24 @@ export const GIC_BASE_URL = process.env.GIC_BASE_URL ?? `http://localhost:${PORT
 // Middleware
 // ──────────────────────────────────────────────────────────────────────────────
 
-const limiter = rateLimit({
+// ── Rate Limiting: per-tenant keyed, not per-IP ────────────────────────────
+// Each tenant (identified by x-tenant-id header) gets its own quota pool.
+// This prevents a single tenant from starving all others behind a shared load
+// balancer or CDN where all requests share one IP. IP is used as fallback for
+// unauthenticated requests that don't carry a tenant header.
+const tenantRateLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 300,
-  message: { error: "Too many requests" }
+  message: { error: "Too many requests — per-tenant quota exceeded" },
+  keyGenerator: (req) => {
+    const tenantId = req.headers["x-tenant-id"] as string | undefined;
+    return tenantId?.trim() || req.ip || "unknown";
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
-app.use(limiter);
+app.use(tenantRateLimiter);
 
 export const logger = pino({ level: LOG_LEVEL });
 app.use(pinoHttp({ logger }));

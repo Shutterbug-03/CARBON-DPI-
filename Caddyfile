@@ -1,0 +1,130 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Carbon DPI — Caddyfile (TLS Reverse Proxy)
+#
+# Caddy automatically provisions and renews Let's Encrypt TLS certificates.
+# For local development with self-signed certs, use `localhost` as DOMAIN.
+#
+# Production usage:
+#   1. Set DOMAIN=yourdomain.com in your .env file
+#   2. Set ACME_EMAIL=you@yourdomain.com
+#   3. Ensure ports 80 and 443 are open on your server
+#   4. Run: docker compose up -d caddy
+#
+# Routes:
+#   https://verify.{DOMAIN}   → Reference Node  (BPP, GIC issuance)
+#   https://registry.{DOMAIN} → Trust Registry   (device/verifier registration)
+#   https://gateway.{DOMAIN}  → Beckn Gateway    (BAP entry point)
+#   https://bus.{DOMAIN}      → Event Bus        (telemetry ingestion HTTP API)
+# ──────────────────────────────────────────────────────────────────────────────
+
+{
+    # Global options
+    email {$ACME_EMAIL}
+    # Uncomment to use Let's Encrypt staging for testing:
+    # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+# ── Reference Node (Verification BPP) ─────────────────────────────────────────
+verify.{$DOMAIN} {
+    reverse_proxy reference-node:3001 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # Security headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Remove server info
+        -Server
+    }
+
+    # Rate limiting at the edge (per-IP, complementing per-tenant in app)
+    rate_limit {
+        zone global {
+            key {remote_host}
+            events 600
+            window 1m
+        }
+    }
+
+    log {
+        output file /data/logs/verify-access.log {
+            roll_size 100mb
+            roll_keep 5
+        }
+        format json
+    }
+}
+
+# ── Trust Registry ─────────────────────────────────────────────────────────────
+registry.{$DOMAIN} {
+    reverse_proxy registry:3003 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        -Server
+    }
+
+    log {
+        output file /data/logs/registry-access.log {
+            roll_size 50mb
+            roll_keep 3
+        }
+        format json
+    }
+}
+
+# ── Beckn Gateway ──────────────────────────────────────────────────────────────
+gateway.{$DOMAIN} {
+    reverse_proxy gateway:3005 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        -Server
+    }
+}
+
+# ── Event Bus (HTTP telemetry ingestion) ───────────────────────────────────────
+bus.{$DOMAIN} {
+    reverse_proxy event-bus:3004 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        -Server
+    }
+
+    # Tighter rate limit for telemetry ingestion endpoint
+    route /v1/ingest {
+        rate_limit {
+            zone ingest {
+                key {remote_host}
+                events 1000
+                window 1m
+            }
+        }
+        reverse_proxy event-bus:3004
+    }
+}
+
+# ── Local dev: redirect HTTP → HTTPS (only for non-localhost domains) ──────────
+http://verify.{$DOMAIN} http://registry.{$DOMAIN} http://gateway.{$DOMAIN} http://bus.{$DOMAIN} {
+    redir https://{host}{uri} permanent
+}
